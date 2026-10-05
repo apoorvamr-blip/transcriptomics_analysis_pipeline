@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import requests
 import time
+import urllib.parse
+import streamlit.components.v1 as components
 from scipy.stats import ttest_ind
 
 
@@ -20,7 +22,8 @@ st.title("🧬 Transcriptomics & KEGG Pathway Analyzer")
 
 st.write(
     "A pipeline for differential expression analysis, "
-    "gene annotation, and KEGG pathway mapping."
+    "gene annotation, protein domain annotation, and KEGG "
+    "pathway visualization."
 )
 
 
@@ -64,12 +67,16 @@ treatment_columns = [
 
 
 # ------------------------------------------------------------
-# Calculate mean expression
+# Mean expression
 # ------------------------------------------------------------
 
-data["Control_Mean"] = data[control_columns].mean(axis=1)
+data["Control_Mean"] = data[
+    control_columns
+].mean(axis=1)
 
-data["Treatment_Mean"] = data[treatment_columns].mean(axis=1)
+data["Treatment_Mean"] = data[
+    treatment_columns
+].mean(axis=1)
 
 
 # ------------------------------------------------------------
@@ -99,9 +106,13 @@ p_values = []
 
 for _, row in data.iterrows():
 
-    control_values = row[control_columns].astype(float)
+    control_values = row[
+        control_columns
+    ].astype(float)
 
-    treatment_values = row[treatment_columns].astype(float)
+    treatment_values = row[
+        treatment_columns
+    ].astype(float)
 
     statistic, p_value = ttest_ind(
         control_values,
@@ -138,12 +149,15 @@ def benjamini_hochberg(pvalues):
         rank = i + 1
 
         value = (
-            ranked_pvalues[i] *
-            n /
-            rank
+            ranked_pvalues[i]
+            * n
+            / rank
         )
 
-        value = min(value, previous)
+        value = min(
+            value,
+            previous
+        )
 
         adjusted[i] = value
 
@@ -156,8 +170,10 @@ def benjamini_hochberg(pvalues):
     return result
 
 
-data["Adjusted_P_Value"] = benjamini_hochberg(
-    data["P_Value"]
+data["Adjusted_P_Value"] = (
+    benjamini_hochberg(
+        data["P_Value"]
+    )
 )
 
 
@@ -188,15 +204,20 @@ adjusted_p_threshold = st.number_input(
 
 def classify_gene(row):
 
-    log2fc = row["Log2_Fold_Change"]
+    log2fc = row[
+        "Log2_Fold_Change"
+    ]
 
-    adjusted_p = row["Adjusted_P_Value"]
+    adjusted_p = row[
+        "Adjusted_P_Value"
+    ]
 
     if (
         adjusted_p <= adjusted_p_threshold
         and
         log2fc >= log2fc_threshold
     ):
+
         return "Upregulated"
 
     elif (
@@ -204,9 +225,11 @@ def classify_gene(row):
         and
         log2fc <= -log2fc_threshold
     ):
+
         return "Downregulated"
 
     else:
+
         return "Not significant"
 
 
@@ -217,10 +240,12 @@ data["Regulation"] = data.apply(
 
 
 # ============================================================
-# DISPLAY DIFFERENTIAL EXPRESSION RESULTS
+# DIFFERENTIAL EXPRESSION RESULTS
 # ============================================================
 
-st.subheader("Differential Expression Results")
+st.subheader(
+    "Differential Expression Results"
+)
 
 de_columns = [
     "Gene_ID",
@@ -243,36 +268,44 @@ st.dataframe(
 # SUMMARY
 # ============================================================
 
-st.subheader("📈 Differential Expression Summary")
+st.subheader(
+    "📈 Differential Expression Summary"
+)
 
 up_count = (
-    data["Regulation"] == "Upregulated"
+    data["Regulation"]
+    == "Upregulated"
 ).sum()
 
 down_count = (
-    data["Regulation"] == "Downregulated"
+    data["Regulation"]
+    == "Downregulated"
 ).sum()
 
 not_sig_count = (
-    data["Regulation"] == "Not significant"
+    data["Regulation"]
+    == "Not significant"
 ).sum()
 
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
+
     st.metric(
         "Upregulated",
         up_count
     )
 
 with col2:
+
     st.metric(
         "Downregulated",
         down_count
     )
 
 with col3:
+
     st.metric(
         "Not Significant",
         not_sig_count
@@ -284,11 +317,14 @@ with col3:
 # ============================================================
 
 significant_genes = data[
-    data["Regulation"] != "Not significant"
+    data["Regulation"]
+    != "Not significant"
 ].copy()
 
 
-st.subheader("🎯 Significant Genes")
+st.subheader(
+    "🎯 Significant Genes"
+)
 
 if len(significant_genes) > 0:
 
@@ -315,15 +351,20 @@ else:
 # NCBI ANNOTATION
 # ============================================================
 
-st.header("2️⃣ NCBI Gene Annotation")
-
-
-NCBI_BASE_URL = (
-    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+st.header(
+    "2️⃣ NCBI Gene Annotation"
 )
 
 
-def get_ncbi_annotation(gene_id):
+NCBI_BASE_URL = (
+    "https://eutils.ncbi.nlm.nih.gov/"
+    "entrez/eutils/"
+)
+
+
+def get_ncbi_annotation(
+    gene_id
+):
 
     search_url = (
         NCBI_BASE_URL +
@@ -354,24 +395,41 @@ def get_ncbi_annotation(gene_id):
 
     search_data = response.json()
 
-    ids = search_data.get(
-        "esearchresult",
-        {}
-    ).get(
-        "idlist",
-        []
+    ids = (
+        search_data
+        .get(
+            "esearchresult",
+            {}
+        )
+        .get(
+            "idlist",
+            []
+        )
     )
 
     if not ids:
 
         return {
-            "NCBI_Gene_ID": "Not found",
-            "Gene_Name": "Not found",
-            "Gene_Description": "Not found",
-            "Organism": "Not found",
-            "Chromosome": "Not found",
-            "NCBI_Status": "No NCBI match"
+
+            "NCBI_Gene_ID":
+                "Not found",
+
+            "Gene_Name":
+                "Not found",
+
+            "Gene_Description":
+                "Not found",
+
+            "Organism":
+                "Not found",
+
+            "Chromosome":
+                "Not found",
+
+            "NCBI_Status":
+                "No NCBI match"
         }
+
 
     ncbi_gene_id = ids[0]
 
@@ -398,14 +456,20 @@ def get_ncbi_annotation(gene_id):
 
     summary_response.raise_for_status()
 
-    summary_data = summary_response.json()
+    summary_data = (
+        summary_response.json()
+    )
 
-    result = summary_data.get(
-        "result",
-        {}
-    ).get(
-        ncbi_gene_id,
-        {}
+    result = (
+        summary_data
+        .get(
+            "result",
+            {}
+        )
+        .get(
+            ncbi_gene_id,
+            {}
+        )
     )
 
 
@@ -429,10 +493,11 @@ def get_ncbi_annotation(gene_id):
         "Organism":
             result.get(
                 "organism",
-                {}).get(
-                    "scientificname",
-                    "Not available"
-                ),
+                {}
+            ).get(
+                "scientificname",
+                "Not available"
+            ),
 
         "Chromosome":
             result.get(
@@ -461,16 +526,22 @@ if st.button(
 
         progress = st.progress(0)
 
-        total = len(significant_genes)
+        total = len(
+            significant_genes
+        )
 
         for i, gene_id in enumerate(
-            significant_genes["Gene_ID"]
+            significant_genes[
+                "Gene_ID"
+            ]
         ):
 
             try:
 
-                annotation = get_ncbi_annotation(
-                    gene_id
+                annotation = (
+                    get_ncbi_annotation(
+                        gene_id
+                    )
                 )
 
             except Exception as e:
@@ -496,11 +567,16 @@ if st.button(
                         "Request failed"
                 }
 
-            annotation["Gene_ID"] = gene_id
+
+            annotation[
+                "Gene_ID"
+            ] = gene_id
+
 
             ncbi_results.append(
                 annotation
             )
+
 
             progress.progress(
                 (i + 1) / total
@@ -537,15 +613,20 @@ if "ncbi_annotation" in st.session_state:
 # UNIPROT ANNOTATION
 # ============================================================
 
-st.header("3️⃣ UniProt Protein Annotation")
-
-
-UNIPROT_URL = (
-    "https://rest.uniprot.org/uniprotkb/search"
+st.header(
+    "3️⃣ UniProt Protein Annotation"
 )
 
 
-def get_uniprot_annotation(gene_id):
+UNIPROT_URL = (
+    "https://rest.uniprot.org/"
+    "uniprotkb/search"
+)
+
+
+def get_uniprot_annotation(
+    gene_id
+):
 
     params = {
 
@@ -618,10 +699,13 @@ def get_uniprot_annotation(gene_id):
         }
 
 
-    # Prefer reviewed Swiss-Prot entry
     reviewed_results = [
+
         r for r in results
-        if r.get("entryType") == "UniProtKB reviewed (Swiss-Prot)"
+
+        if r.get("entryType")
+        ==
+        "UniProtKB reviewed (Swiss-Prot)"
     ]
 
 
@@ -705,7 +789,8 @@ def get_uniprot_annotation(gene_id):
             "entryType",
             ""
         )
-        == "UniProtKB reviewed (Swiss-Prot)"
+        ==
+        "UniProtKB reviewed (Swiss-Prot)"
     )
 
 
@@ -715,12 +800,20 @@ def get_uniprot_annotation(gene_id):
     )
 
 
-    function_text = "Not available"
+    function_text = (
+        "Not available"
+    )
 
 
     for comment in comments:
 
-        if comment.get("commentType") == "FUNCTION":
+        if (
+            comment.get(
+                "commentType"
+            )
+            ==
+            "FUNCTION"
+        ):
 
             texts = comment.get(
                 "texts",
@@ -729,9 +822,12 @@ def get_uniprot_annotation(gene_id):
 
             if texts:
 
-                function_text = texts[0].get(
-                    "value",
-                    "Not available"
+                function_text = (
+                    texts[0]
+                    .get(
+                        "value",
+                        "Not available"
+                    )
                 )
 
             break
@@ -755,7 +851,12 @@ def get_uniprot_annotation(gene_id):
             protein_length,
 
         "UniProt_Reviewed":
-            "Yes" if reviewed else "No",
+            (
+                "Yes"
+                if reviewed
+                else
+                "No"
+            ),
 
         "UniProt_Function":
             function_text,
@@ -781,17 +882,23 @@ if st.button(
 
         progress = st.progress(0)
 
-        total = len(significant_genes)
+        total = len(
+            significant_genes
+        )
 
 
         for i, gene_id in enumerate(
-            significant_genes["Gene_ID"]
+            significant_genes[
+                "Gene_ID"
+            ]
         ):
 
             try:
 
-                annotation = get_uniprot_annotation(
-                    gene_id
+                annotation = (
+                    get_uniprot_annotation(
+                        gene_id
+                    )
                 )
 
             except Exception as e:
@@ -824,7 +931,10 @@ if st.button(
                 }
 
 
-            annotation["Gene_ID"] = gene_id
+            annotation[
+                "Gene_ID"
+            ] = gene_id
+
 
             uniprot_results.append(
                 annotation
@@ -863,10 +973,12 @@ if "uniprot_annotation" in st.session_state:
 
 
 # ============================================================
-# INTERPRO ANNOTATION
+# INTERPRO
 # ============================================================
 
-st.header("4️⃣ InterPro Protein Domain Annotation")
+st.header(
+    "4️⃣ InterPro Protein Domain Annotation"
+)
 
 
 INTERPRO_BASE_URL = (
@@ -903,12 +1015,10 @@ def get_interpro_annotations(
     )
 
 
-    if response.status_code == 204:
-
-        return []
-
-
-    if response.status_code == 404:
+    if response.status_code in [
+        204,
+        404
+    ]:
 
         return []
 
@@ -939,12 +1049,17 @@ def get_interpro_annotations(
         )
 
 
-        if next_response.status_code != 200:
+        if (
+            next_response.status_code
+            != 200
+        ):
 
             break
 
 
-        next_data = next_response.json()
+        next_data = (
+            next_response.json()
+        )
 
 
         all_results.extend(
@@ -988,7 +1103,10 @@ def extract_interpro_match(
     )
 
 
-    if isinstance(name, dict):
+    if isinstance(
+        name,
+        dict
+    ):
 
         name = name.get(
             "name",
@@ -1015,8 +1133,10 @@ def extract_interpro_match(
 
     else:
 
-        member_databases = metadata.get(
-            "member_databases"
+        member_databases = (
+            metadata.get(
+                "member_databases"
+            )
         )
 
 
@@ -1028,8 +1148,10 @@ def extract_interpro_match(
             and member_databases
         ):
 
-            source_text = ", ".join(
-                member_databases.keys()
+            source_text = (
+                ", ".join(
+                    member_databases.keys()
+                )
             )
 
         else:
@@ -1092,9 +1214,13 @@ def extract_interpro_match(
 
 
     region_text = (
+
         ", ".join(regions)
+
         if regions
+
         else
+
         "Not provided"
     )
 
@@ -1133,15 +1259,14 @@ if st.button(
 
     else:
 
-        uniprot_df = st.session_state[
-            "uniprot_annotation"
-        ]
+        uniprot_df = (
+            st.session_state[
+                "uniprot_annotation"
+            ]
+        )
 
 
         interpro_results = []
-
-        progress = st.progress(0)
-
 
         valid_rows = uniprot_df[
             ~uniprot_df[
@@ -1155,94 +1280,39 @@ if st.button(
         ]
 
 
-        total = len(valid_rows)
+        progress = st.progress(0)
+
+        total = len(
+            valid_rows
+        )
 
 
-        if total == 0:
+        for i, (
+            _,
+            row
+        ) in enumerate(
+            valid_rows.iterrows()
+        ):
 
-            st.warning(
-                "No valid UniProt accessions were found."
-            )
+            gene_id = row[
+                "Gene_ID"
+            ]
 
-        else:
-
-            for i, (_, row) in enumerate(
-                valid_rows.iterrows()
-            ):
-
-                gene_id = row[
-                    "Gene_ID"
-                ]
-
-
-                accession = row[
-                    "UniProt_Accession"
-                ]
+            accession = row[
+                "UniProt_Accession"
+            ]
 
 
-                try:
+            try:
 
-                    matches = (
-                        get_interpro_annotations(
-                            accession
-                        )
+                matches = (
+                    get_interpro_annotations(
+                        accession
                     )
+                )
 
 
-                    if not matches:
-
-                        interpro_results.append({
-
-                            "Gene_ID":
-                                gene_id,
-
-                            "UniProt_Accession":
-                                accession,
-
-                            "InterPro_Accession":
-                                "Not found",
-
-                            "InterPro_Name":
-                                "No InterPro match",
-
-                            "InterPro_Type":
-                                "Not available",
-
-                            "InterPro_Source":
-                                "Not available",
-
-                            "InterPro_Regions":
-                                "Not provided"
-                        })
-
-
-                    else:
-
-                        for match in matches:
-
-                            parsed = (
-                                extract_interpro_match(
-                                    match
-                                )
-                            )
-
-
-                            parsed[
-                                "Gene_ID"
-                            ] = gene_id
-
-
-                            parsed[
-                                "UniProt_Accession"
-                            ] = accession
-
-
-                            interpro_results.append(
-                                parsed
-                            )
-
-
-                except Exception as e:
+                if not matches:
 
                     interpro_results.append({
 
@@ -1253,38 +1323,93 @@ if st.button(
                             accession,
 
                         "InterPro_Accession":
-                            "Error",
+                            "Not found",
 
                         "InterPro_Name":
-                            "Error",
+                            "No InterPro match",
 
                         "InterPro_Type":
-                            "Error",
+                            "Not available",
 
                         "InterPro_Source":
-                            "Error",
+                            "Not available",
 
                         "InterPro_Regions":
-                            str(e)
+                            "Not provided"
                     })
 
+
+                else:
+
+                    for match in matches:
+
+                        parsed = (
+                            extract_interpro_match(
+                                match
+                            )
+                        )
+
+
+                        parsed[
+                            "Gene_ID"
+                        ] = gene_id
+
+
+                        parsed[
+                            "UniProt_Accession"
+                        ] = accession
+
+
+                        interpro_results.append(
+                            parsed
+                        )
+
+
+            except Exception as e:
+
+                interpro_results.append({
+
+                    "Gene_ID":
+                        gene_id,
+
+                    "UniProt_Accession":
+                        accession,
+
+                    "InterPro_Accession":
+                        "Error",
+
+                    "InterPro_Name":
+                        "Error",
+
+                    "InterPro_Type":
+                        "Error",
+
+                    "InterPro_Source":
+                        "Error",
+
+                    "InterPro_Regions":
+                        str(e)
+                })
+
+
+            if total > 0:
 
                 progress.progress(
                     (i + 1) / total
                 )
 
 
-                time.sleep(0.2)
+            time.sleep(0.2)
 
 
-            interpro_df = pd.DataFrame(
-                interpro_results
-            )
+        interpro_df = pd.DataFrame(
+            interpro_results
+        )
 
 
-            st.session_state[
-                "interpro_annotation"
-            ] = interpro_df
+        st.session_state[
+            "interpro_annotation"
+        ] = interpro_df
 
 
 if "interpro_annotation" in st.session_state:
@@ -1292,7 +1417,6 @@ if "interpro_annotation" in st.session_state:
     st.subheader(
         "InterPro Results"
     )
-
 
     st.dataframe(
         st.session_state[
@@ -1306,19 +1430,20 @@ if "interpro_annotation" in st.session_state:
 # KEGG MAPPING
 # ============================================================
 
-st.header("5️⃣ KEGG Pathway Mapping")
+st.header(
+    "5️⃣ KEGG Gene & Pathway Mapping"
+)
 
 
 KEGG_BASE_URL = (
     "https://rest.kegg.jp"
 )
 
-
 KEGG_ORGANISM = "ath"
 
 
 # ------------------------------------------------------------
-# UniProt → KEGG gene
+# UniProt → KEGG
 # ------------------------------------------------------------
 
 def kegg_uniprot_to_gene(
@@ -1369,18 +1494,13 @@ def kegg_uniprot_to_gene(
             continue
 
 
-        source_id = parts[0]
-
-        kegg_id = parts[1]
-
-
         mappings.append({
 
             "UniProt_ID":
-                source_id,
+                parts[0],
 
             "KEGG_Gene_ID":
-                kegg_id
+                parts[1]
         })
 
 
@@ -1388,7 +1508,7 @@ def kegg_uniprot_to_gene(
 
 
 # ------------------------------------------------------------
-# KEGG gene → pathways
+# KEGG gene → pathway
 # ------------------------------------------------------------
 
 def get_kegg_pathways(
@@ -1439,18 +1559,13 @@ def get_kegg_pathways(
             continue
 
 
-        gene_id = parts[0]
-
-        pathway_id = parts[1]
-
-
         pathways.append({
 
             "KEGG_Gene_ID":
-                gene_id,
+                parts[0],
 
             "KEGG_Pathway_ID":
-                pathway_id
+                parts[1]
         })
 
 
@@ -1458,7 +1573,7 @@ def get_kegg_pathways(
 
 
 # ------------------------------------------------------------
-# Pathway IDs → Pathway names
+# Pathway names
 # ------------------------------------------------------------
 
 def get_kegg_pathway_names(
@@ -1515,11 +1630,6 @@ def get_kegg_pathway_names(
         text = response.text.strip()
 
 
-        if not text:
-
-            continue
-
-
         for line in text.splitlines():
 
             parts = line.split(
@@ -1529,14 +1639,9 @@ def get_kegg_pathway_names(
 
             if len(parts) >= 2:
 
-                pathway_id = parts[0]
-
-                pathway_name = parts[1]
-
-
                 pathway_names[
-                    pathway_id
-                ] = pathway_name
+                    parts[0]
+                ] = parts[1]
 
 
         time.sleep(0.4)
@@ -1546,7 +1651,7 @@ def get_kegg_pathway_names(
 
 
 # ============================================================
-# COMPLETE KEGG ANNOTATION FUNCTION
+# COMPLETE KEGG ANNOTATION
 # ============================================================
 
 def annotate_uniprot_with_kegg(
@@ -1568,12 +1673,13 @@ def annotate_uniprot_with_kegg(
     ]
 
 
-    for _, row in valid_rows.iterrows():
+    for _, row in (
+        valid_rows.iterrows()
+    ):
 
         gene_id = row[
             "Gene_ID"
         ]
-
 
         accession = row[
             "UniProt_Accession"
@@ -1582,19 +1688,14 @@ def annotate_uniprot_with_kegg(
 
         try:
 
-            # ------------------------------------------------
-            # STEP 1
-            # UniProt → KEGG gene
-            # ------------------------------------------------
-
-            kegg_gene_mappings = (
+            mappings = (
                 kegg_uniprot_to_gene(
                     accession
                 )
             )
 
 
-            if not kegg_gene_mappings:
+            if not mappings:
 
                 kegg_results.append({
 
@@ -1620,19 +1721,16 @@ def annotate_uniprot_with_kegg(
                 continue
 
 
-            # ------------------------------------------------
-            # STEP 2
-            # Get pathways
-            # ------------------------------------------------
-
             all_pathways = []
 
 
-            for mapping in kegg_gene_mappings:
+            for mapping in mappings:
 
-                kegg_gene_id = mapping[
-                    "KEGG_Gene_ID"
-                ]
+                kegg_gene_id = (
+                    mapping[
+                        "KEGG_Gene_ID"
+                    ]
+                )
 
 
                 pathway_mappings = (
@@ -1642,7 +1740,9 @@ def annotate_uniprot_with_kegg(
                 )
 
 
-                for pathway in pathway_mappings:
+                for pathway in (
+                    pathway_mappings
+                ):
 
                     all_pathways.append({
 
@@ -1661,7 +1761,7 @@ def annotate_uniprot_with_kegg(
 
             if not all_pathways:
 
-                for mapping in kegg_gene_mappings:
+                for mapping in mappings:
 
                     kegg_results.append({
 
@@ -1690,13 +1790,9 @@ def annotate_uniprot_with_kegg(
                 continue
 
 
-            # ------------------------------------------------
-            # STEP 3
-            # Remove duplicate pathways
-            # ------------------------------------------------
+            # Remove duplicate gene/pathway pairs
 
             unique_pathways = []
-
 
             seen = set()
 
@@ -1704,8 +1800,12 @@ def annotate_uniprot_with_kegg(
             for item in all_pathways:
 
                 key = (
-                    item["KEGG_Gene_ID"],
-                    item["KEGG_Pathway_ID"]
+                    item[
+                        "KEGG_Gene_ID"
+                    ],
+                    item[
+                        "KEGG_Pathway_ID"
+                    ]
                 )
 
 
@@ -1718,18 +1818,14 @@ def annotate_uniprot_with_kegg(
                     )
 
 
-            # ------------------------------------------------
-            # STEP 4
-            # Get pathway names
-            # ------------------------------------------------
-
             pathway_ids = [
 
                 item[
                     "KEGG_Pathway_ID"
                 ]
 
-                for item in unique_pathways
+                for item
+                in unique_pathways
             ]
 
 
@@ -1740,22 +1836,11 @@ def annotate_uniprot_with_kegg(
             )
 
 
-            # ------------------------------------------------
-            # STEP 5
-            # Create final KEGG rows
-            # ------------------------------------------------
-
             for item in unique_pathways:
 
                 pathway_id = item[
                     "KEGG_Pathway_ID"
                 ]
-
-
-                pathway_name = pathway_names.get(
-                    pathway_id,
-                    "Name not available"
-                )
 
 
                 kegg_results.append({
@@ -1775,7 +1860,10 @@ def annotate_uniprot_with_kegg(
                         pathway_id,
 
                     "KEGG_Pathway_Name":
-                        pathway_name,
+                        pathway_names.get(
+                            pathway_id,
+                            "Name not available"
+                        ),
 
                     "KEGG_Status":
                         "Matched"
@@ -1812,11 +1900,11 @@ def annotate_uniprot_with_kegg(
 
 
 # ============================================================
-# KEGG BUTTON
+# KEGG MAPPING BUTTON
 # ============================================================
 
 if st.button(
-    "🧬 Map UniProt Proteins to KEGG Pathways"
+    "🧬 Map UniProt Proteins to KEGG"
 ):
 
     if (
@@ -1830,32 +1918,17 @@ if st.button(
 
     else:
 
-        uniprot_df = st.session_state[
-            "uniprot_annotation"
-        ]
-
-
-        if len(uniprot_df) == 0:
-
-            st.warning(
-                "No UniProt annotation results available."
-            )
-
-        else:
-
-            progress_placeholder = st.empty()
-
-
-            progress_placeholder.info(
-                "🔄 Mapping UniProt proteins to KEGG..."
-            )
-
+        with st.spinner(
+            "Mapping proteins to KEGG genes and pathways..."
+        ):
 
             try:
 
                 kegg_df = (
                     annotate_uniprot_with_kegg(
-                        uniprot_df
+                        st.session_state[
+                            "uniprot_annotation"
+                        ]
                     )
                 )
 
@@ -1865,26 +1938,26 @@ if st.button(
                 ] = kegg_df
 
 
-                progress_placeholder.success(
+                st.success(
                     "✅ KEGG mapping completed."
                 )
 
 
             except Exception as e:
 
-                progress_placeholder.error(
+                st.error(
                     f"KEGG mapping failed: {e}"
                 )
 
 
 # ============================================================
-# DISPLAY KEGG RESULTS
+# DISPLAY KEGG TABLE
 # ============================================================
 
 if "kegg_annotation" in st.session_state:
 
     st.subheader(
-        "🛣️ KEGG Pathway Results"
+        "🧬 KEGG Gene → Pathway Mapping"
     )
 
 
@@ -1900,44 +1973,532 @@ if "kegg_annotation" in st.session_state:
 
 
 # ============================================================
-# FINAL INTEGRATED TABLE
+# KEGG VISUAL PATHWAY
 # ============================================================
 
 st.header(
-    "6️⃣ Integrated Transcriptomics Annotation"
+    "6️⃣ Visual KEGG Pathway Analysis"
+)
+
+
+st.write(
+    "Select a pathway to visualize the significant "
+    "transcriptomics genes directly on the KEGG pathway map."
+)
+
+
+if "kegg_annotation" not in st.session_state:
+
+    st.info(
+        "Run KEGG mapping above first."
+    )
+
+else:
+
+    kegg_df = st.session_state[
+        "kegg_annotation"
+    ].copy()
+
+
+    # --------------------------------------------------------
+    # Merge KEGG information with DE results
+    # --------------------------------------------------------
+
+    pathway_gene_df = kegg_df.merge(
+
+        significant_genes[
+            [
+                "Gene_ID",
+                "Log2_Fold_Change",
+                "Adjusted_P_Value",
+                "Regulation"
+            ]
+        ],
+
+        on="Gene_ID",
+
+        how="left"
+    )
+
+
+    # Keep only actual pathway mappings
+
+    pathway_gene_df = (
+        pathway_gene_df[
+            ~pathway_gene_df[
+                "KEGG_Pathway_ID"
+            ].isin(
+                [
+                    "Not found",
+                    "Error"
+                ]
+            )
+        ]
+    )
+
+
+    if len(pathway_gene_df) == 0:
+
+        st.warning(
+            "No significant genes have a KEGG pathway mapping."
+        )
+
+    else:
+
+        # ----------------------------------------------------
+        # Pathway selection
+        # ----------------------------------------------------
+
+        pathway_options = (
+            pathway_gene_df[
+                [
+                    "KEGG_Pathway_ID",
+                    "KEGG_Pathway_Name"
+                ]
+            ]
+            .drop_duplicates()
+            .sort_values(
+                "KEGG_Pathway_ID"
+            )
+        )
+
+
+        pathway_labels = {}
+
+        for _, row in (
+            pathway_options.iterrows()
+        ):
+
+            pathway_id = row[
+                "KEGG_Pathway_ID"
+            ]
+
+            pathway_name = row[
+                "KEGG_Pathway_Name"
+            ]
+
+            pathway_labels[
+                pathway_id
+            ] = (
+                f"{pathway_id} — "
+                f"{pathway_name}"
+            )
+
+
+        selected_pathway = st.selectbox(
+
+            "🛣️ Select a KEGG pathway",
+
+            options=list(
+                pathway_labels.keys()
+            ),
+
+            format_func=lambda x:
+                pathway_labels[x]
+        )
+
+
+        # ----------------------------------------------------
+        # Genes in selected pathway
+        # ----------------------------------------------------
+
+        selected_genes = (
+            pathway_gene_df[
+                pathway_gene_df[
+                    "KEGG_Pathway_ID"
+                ]
+                ==
+                selected_pathway
+            ]
+            .copy()
+        )
+
+
+        pathway_name = (
+            pathway_labels[
+                selected_pathway
+            ]
+        )
+
+
+        st.subheader(
+            f"🧬 {pathway_name}"
+        )
+
+
+        # ----------------------------------------------------
+        # Count up/down
+        # ----------------------------------------------------
+
+        selected_up = (
+            selected_genes[
+                selected_genes[
+                    "Regulation"
+                ]
+                ==
+                "Upregulated"
+            ]
+        )
+
+
+        selected_down = (
+            selected_genes[
+                selected_genes[
+                    "Regulation"
+                ]
+                ==
+                "Downregulated"
+            ]
+        )
+
+
+        col1, col2, col3 = st.columns(3)
+
+
+        with col1:
+
+            st.metric(
+                "Genes in pathway",
+                len(
+                    selected_genes[
+                        "Gene_ID"
+                    ].unique()
+                )
+            )
+
+
+        with col2:
+
+            st.metric(
+                "Upregulated",
+                len(
+                    selected_up[
+                        "Gene_ID"
+                    ].unique()
+                )
+            )
+
+
+        with col3:
+
+            st.metric(
+                "Downregulated",
+                len(
+                    selected_down[
+                        "Gene_ID"
+                    ].unique()
+                )
+            )
+
+
+        # ----------------------------------------------------
+        # KEGG coloring dataset
+        # ----------------------------------------------------
+
+        color_lines = []
+
+
+        # Upregulated = red
+
+        for _, row in (
+            selected_up.iterrows()
+        ):
+
+            kegg_gene = row[
+                "KEGG_Gene_ID"
+            ]
+
+
+            if pd.isna(kegg_gene):
+
+                continue
+
+
+            if kegg_gene in [
+                "Not found",
+                "Error"
+            ]:
+
+                continue
+
+
+            color_lines.append(
+                f"{kegg_gene} #ffcccc,#cc0000"
+            )
+
+
+        # Downregulated = blue
+
+        for _, row in (
+            selected_down.iterrows()
+        ):
+
+            kegg_gene = row[
+                "KEGG_Gene_ID"
+            ]
+
+
+            if pd.isna(kegg_gene):
+
+                continue
+
+
+            if kegg_gene in [
+                "Not found",
+                "Error"
+            ]:
+
+                continue
+
+
+            color_lines.append(
+                f"{kegg_gene} #cce5ff,#0055aa"
+            )
+
+
+        # ----------------------------------------------------
+        # Build KEGG visualization URL
+        # ----------------------------------------------------
+
+        if color_lines:
+
+            color_dataset = (
+                "\n".join(
+                    color_lines
+                )
+            )
+
+
+            encoded_dataset = (
+                urllib.parse.quote(
+                    color_dataset,
+                    safe=""
+                )
+            )
+
+
+            kegg_visual_url = (
+
+                "https://www.kegg.jp/"
+                "kegg-bin/show_pathway?"
+
+                f"map={selected_pathway}"
+
+                f"&multi_query="
+                f"{encoded_dataset}"
+            )
+
+
+        else:
+
+            kegg_visual_url = (
+
+                "https://www.kegg.jp/pathway/"
+                f"{selected_pathway}"
+            )
+
+
+        # ----------------------------------------------------
+        # Legend
+        # ----------------------------------------------------
+
+        st.markdown(
+            """
+            ### Pathway legend
+
+            🔴 **Red** = Upregulated gene
+
+            🔵 **Blue** = Downregulated gene
+
+            The pathway itself is supplied by KEGG; the
+            highlighted objects come from your mapped
+            transcriptomics genes.
+            """
+        )
+
+
+        # ----------------------------------------------------
+        # Display KEGG pathway
+        # ----------------------------------------------------
+
+        st.subheader(
+            "🗺️ KEGG Pathway Map"
+        )
+
+
+        if color_lines:
+
+            iframe_html = f"""
+            <div style="
+                width: 100%;
+                height: 900px;
+                overflow: auto;
+                border: 1px solid #cccccc;
+                border-radius: 8px;
+            ">
+
+                <iframe
+                    src="{kegg_visual_url}"
+                    width="100%"
+                    height="880"
+                    style="border:none;"
+                >
+                </iframe>
+
+            </div>
+            """
+
+
+            components.html(
+                iframe_html,
+                height=920,
+                scrolling=True
+            )
+
+
+            st.markdown(
+                f"**[🔗 Open this colored pathway directly in KEGG]({kegg_visual_url})**"
+            )
+
+
+        else:
+
+            st.info(
+                "No upregulated or downregulated KEGG genes "
+                "were available to color on this pathway."
+            )
+
+
+            st.markdown(
+                f"**[🔗 Open pathway in KEGG](https://www.kegg.jp/pathway/{selected_pathway})**"
+            )
+
+
+        # ----------------------------------------------------
+        # Genes represented on pathway
+        # ----------------------------------------------------
+
+        st.subheader(
+            "🧬 Genes Represented on This Pathway"
+        )
+
+
+        display_columns = [
+
+            "Gene_ID",
+
+            "KEGG_Gene_ID",
+
+            "Log2_Fold_Change",
+
+            "Adjusted_P_Value",
+
+            "Regulation"
+        ]
+
+
+        st.dataframe(
+
+            selected_genes[
+                display_columns
+            ],
+
+            use_container_width=True
+        )
+
+
+        # ----------------------------------------------------
+        # Download pathway gene table
+        # ----------------------------------------------------
+
+        pathway_csv = (
+            selected_genes[
+                display_columns
+            ]
+            .to_csv(
+                index=False
+            )
+            .encode(
+                "utf-8"
+            )
+        )
+
+
+        st.download_button(
+
+            label=(
+                "⬇️ Download "
+                "Pathway Gene Table"
+            ),
+
+            data=pathway_csv,
+
+            file_name=(
+                f"{selected_pathway}"
+                "_genes.csv"
+            ),
+
+            mime="text/csv"
+        )
+
+
+# ============================================================
+# INTEGRATED RESULTS
+# ============================================================
+
+st.header(
+    "7️⃣ Integrated Transcriptomics Annotation"
 )
 
 
 if (
-    "ncbi_annotation" in st.session_state
+    "ncbi_annotation"
+    in st.session_state
+
     and
-    "uniprot_annotation" in st.session_state
+
+    "uniprot_annotation"
+    in st.session_state
+
     and
-    "interpro_annotation" in st.session_state
+
+    "interpro_annotation"
+    in st.session_state
+
     and
-    "kegg_annotation" in st.session_state
+
+    "kegg_annotation"
+    in st.session_state
 ):
 
 
     # --------------------------------------------------------
-    # Start with differential expression results
+    # Start with significant genes
     # --------------------------------------------------------
 
-    final_df = significant_genes.copy()
+    final_df = (
+        significant_genes.copy()
+    )
 
 
     # --------------------------------------------------------
     # NCBI
     # --------------------------------------------------------
 
-    ncbi_df = st.session_state[
-        "ncbi_annotation"
-    ].copy()
+    ncbi_df = (
+        st.session_state[
+            "ncbi_annotation"
+        ]
+        .copy()
+    )
 
 
     final_df = final_df.merge(
+
         ncbi_df,
+
         on="Gene_ID",
+
         how="left"
     )
 
@@ -1946,30 +2507,44 @@ if (
     # UniProt
     # --------------------------------------------------------
 
-    uniprot_df = st.session_state[
-        "uniprot_annotation"
-    ].copy()
+    uniprot_df = (
+        st.session_state[
+            "uniprot_annotation"
+        ]
+        .copy()
+    )
 
 
     final_df = final_df.merge(
+
         uniprot_df,
+
         on="Gene_ID",
+
         how="left"
     )
 
 
     # --------------------------------------------------------
-    # InterPro
+    # InterPro summary
     # --------------------------------------------------------
 
-    interpro_df = st.session_state[
-        "interpro_annotation"
-    ].copy()
+    interpro_df = (
+        st.session_state[
+            "interpro_annotation"
+        ]
+        .copy()
+    )
 
 
     interpro_summary = (
+
         interpro_df
-        .groupby("Gene_ID")
+
+        .groupby(
+            "Gene_ID"
+        )
+
         .agg({
 
             "InterPro_Accession":
@@ -2007,29 +2582,41 @@ if (
                     .unique()
                 )
         })
+
         .reset_index()
     )
 
 
     final_df = final_df.merge(
+
         interpro_summary,
+
         on="Gene_ID",
+
         how="left"
     )
 
 
     # --------------------------------------------------------
-    # KEGG
+    # KEGG summary
     # --------------------------------------------------------
 
-    kegg_df = st.session_state[
-        "kegg_annotation"
-    ].copy()
+    kegg_df = (
+        st.session_state[
+            "kegg_annotation"
+        ]
+        .copy()
+    )
 
 
     kegg_summary = (
+
         kegg_df
-        .groupby("Gene_ID")
+
+        .groupby(
+            "Gene_ID"
+        )
+
         .agg({
 
             "KEGG_Gene_ID":
@@ -2060,23 +2647,27 @@ if (
                     .unique()
                 )
         })
+
         .reset_index()
     )
 
 
     final_df = final_df.merge(
+
         kegg_summary,
+
         on="Gene_ID",
+
         how="left"
     )
 
 
     # --------------------------------------------------------
-    # Display final table
+    # Display
     # --------------------------------------------------------
 
     st.success(
-        "🎉 Complete annotation pipeline available!"
+        "🎉 Complete annotation and pathway mapping available!"
     )
 
 
@@ -2087,18 +2678,32 @@ if (
 
 
     # --------------------------------------------------------
-    # Download final table
+    # Download
     # --------------------------------------------------------
 
-    csv_data = final_df.to_csv(
-        index=False
-    ).encode("utf-8")
+    csv_data = (
+        final_df
+        .to_csv(
+            index=False
+        )
+        .encode(
+            "utf-8"
+        )
+    )
 
 
     st.download_button(
-        label="⬇️ Download Integrated Results CSV",
+
+        label=(
+            "⬇️ Download Integrated Results CSV"
+        ),
+
         data=csv_data,
-        file_name="transcriptomics_integrated_results.csv",
+
+        file_name=(
+            "transcriptomics_integrated_results.csv"
+        ),
+
         mime="text/csv"
     )
 
@@ -2115,7 +2720,9 @@ else:
 # PIPELINE STATUS
 # ============================================================
 
-st.header("🧬 Pipeline Status")
+st.header(
+    "🧬 Pipeline Status"
+)
 
 
 status_data = {
@@ -2132,10 +2739,13 @@ status_data = {
 
         "InterPro Annotation",
 
-        "KEGG Mapping",
+        "KEGG Gene Mapping",
+
+        "KEGG Visual Pathway",
 
         "Integrated Results"
     ],
+
 
     "Status": [
 
@@ -2143,54 +2753,97 @@ status_data = {
 
         "✅ Complete",
 
-        (
-            "✅ Complete"
-            if "ncbi_annotation"
-            in st.session_state
-            else
-            "⏳ Pending"
-        ),
 
         (
             "✅ Complete"
-            if "uniprot_annotation"
+
+            if
+            "ncbi_annotation"
             in st.session_state
+
             else
+
             "⏳ Pending"
         ),
 
-        (
-            "✅ Complete"
-            if "interpro_annotation"
-            in st.session_state
-            else
-            "⏳ Pending"
-        ),
 
         (
             "✅ Complete"
-            if "kegg_annotation"
+
+            if
+            "uniprot_annotation"
             in st.session_state
+
             else
+
             "⏳ Pending"
         ),
 
+
         (
             "✅ Complete"
+
+            if
+            "interpro_annotation"
+            in st.session_state
+
+            else
+
+            "⏳ Pending"
+        ),
+
+
+        (
+            "✅ Complete"
+
+            if
+            "kegg_annotation"
+            in st.session_state
+
+            else
+
+            "⏳ Pending"
+        ),
+
+
+        (
+            "✅ Available"
+
+            if
+            "kegg_annotation"
+            in st.session_state
+
+            else
+
+            "⏳ Pending"
+        ),
+
+
+        (
+            "✅ Complete"
+
             if (
                 "ncbi_annotation"
                 in st.session_state
+
                 and
+
                 "uniprot_annotation"
                 in st.session_state
+
                 and
+
                 "interpro_annotation"
                 in st.session_state
+
                 and
+
                 "kegg_annotation"
                 in st.session_state
             )
+
             else
+
             "⏳ Pending"
         )
     ]

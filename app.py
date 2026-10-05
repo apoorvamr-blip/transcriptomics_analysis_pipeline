@@ -37,13 +37,16 @@ st.write(
 st.header("1. Expression Data")
 
 try:
+
     data = pd.read_csv("dummy_data.csv")
 
 except FileNotFoundError:
+
     st.error(
         "dummy_data.csv was not found. "
         "Please make sure the file is present in the repository."
     )
+
     st.stop()
 
 
@@ -54,7 +57,7 @@ st.dataframe(
 
 
 # =========================================================
-# DEFINE EXPERIMENTAL GROUPS
+# EXPERIMENTAL GROUPS
 # =========================================================
 
 control_columns = [
@@ -705,13 +708,6 @@ def search_uniprot_gene(
     organism_id="3702"
 ):
 
-    """
-    Search UniProtKB using the gene identifier
-    and Arabidopsis thaliana taxonomy.
-
-    Returns matching UniProt protein records.
-    """
-
     query = (
         f'gene_exact:{gene_id} '
         f'AND organism_id:{organism_id}'
@@ -769,6 +765,7 @@ def extract_protein_name(entry):
         )
 
         if recommended:
+
             return recommended
 
         submitted = (
@@ -788,6 +785,7 @@ def extract_protein_name(entry):
             )
 
     except Exception:
+
         pass
 
     return "Not available"
@@ -821,17 +819,13 @@ def extract_function(entry):
                     )
 
     except Exception:
+
         pass
 
     return "Not available"
 
 
 def get_uniprot_annotation(gene_id):
-
-    """
-    Retrieve the best available UniProt result
-    for a gene in Arabidopsis thaliana.
-    """
 
     try:
 
@@ -857,10 +851,6 @@ def get_uniprot_annotation(gene_id):
                 "UniProt_Status": "Not found"
             }
 
-        # -------------------------------------------------
-        # Prefer reviewed / Swiss-Prot entries if present
-        # -------------------------------------------------
-
         reviewed_entries = [
             entry
             for entry in entries
@@ -877,27 +867,15 @@ def get_uniprot_annotation(gene_id):
 
             entry = entries[0]
 
-        # -------------------------------------------------
-        # Extract accession
-        # -------------------------------------------------
-
         accession = entry.get(
             "primaryAccession",
             "Not available"
         )
 
-        # -------------------------------------------------
-        # Entry ID
-        # -------------------------------------------------
-
         entry_id = entry.get(
             "uniProtkbId",
             "Not available"
         )
-
-        # -------------------------------------------------
-        # Organism
-        # -------------------------------------------------
 
         organism = (
             entry.get(
@@ -910,10 +888,6 @@ def get_uniprot_annotation(gene_id):
             )
         )
 
-        # -------------------------------------------------
-        # Protein length
-        # -------------------------------------------------
-
         protein_length = (
             entry.get(
                 "sequence",
@@ -925,19 +899,12 @@ def get_uniprot_annotation(gene_id):
             )
         )
 
-        # -------------------------------------------------
-        # Review status
-        # -------------------------------------------------
-
         entry_type = entry.get(
             "entryType",
             "Not available"
         )
 
-        if (
-            "reviewed"
-            in entry_type.lower()
-        ):
+        if "reviewed" in entry_type.lower():
 
             reviewed_status = "Reviewed"
 
@@ -945,17 +912,9 @@ def get_uniprot_annotation(gene_id):
 
             reviewed_status = "Unreviewed"
 
-        # -------------------------------------------------
-        # Protein name
-        # -------------------------------------------------
-
         protein_name = extract_protein_name(
             entry
         )
-
-        # -------------------------------------------------
-        # Function
-        # -------------------------------------------------
 
         function = extract_function(
             entry
@@ -1001,11 +960,6 @@ if significant_genes.empty:
     )
 
 else:
-
-    st.write(
-        "Searches UniProtKB for protein records corresponding "
-        "to the significant Arabidopsis genes."
-    )
 
     if st.button(
         "🧬 Annotate Significant Genes with UniProt"
@@ -1053,10 +1007,6 @@ else:
             uniprot_results
         )
 
-        # -------------------------------------------------
-        # Merge with differential-expression results
-        # -------------------------------------------------
-
         uniprot_display = (
             significant_genes[
                 [
@@ -1083,28 +1033,388 @@ else:
             use_container_width=True
         )
 
-        # Save for next stages
         st.session_state[
             "uniprot_annotation"
         ] = uniprot_display
 
 
 # =========================================================
-# INTERPRETATION
+# INTERPRO API
 # =========================================================
 
-st.header("10. Current Pipeline Status")
+INTERPRO_BASE_URL = (
+    "https://www.ebi.ac.uk/interpro/api"
+)
+
+
+def get_interpro_annotations(
+    uniprot_accession
+):
+
+    """
+    Retrieve InterPro entries associated with
+    a UniProt protein.
+
+    The InterPro protein endpoint returns
+    protein-to-entry matches.
+    """
+
+    url = (
+        INTERPRO_BASE_URL
+        + "/protein/UniProt/"
+        + str(uniprot_accession)
+        + "/entry/InterPro/"
+    )
+
+    params = {
+        "format": "json",
+        "page_size": 200
+    }
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=30
+    )
+
+    if response.status_code == 404:
+
+        return []
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    return result.get(
+        "results",
+        []
+    )
+
+
+def extract_interpro_match(
+    match
+):
+
+    """
+    Extract useful information from
+    an InterPro API result.
+
+    The API structure can contain
+    metadata plus protein-location
+    information.
+    """
+
+    metadata = match.get(
+        "metadata",
+        {}
+    )
+
+    accession = metadata.get(
+        "accession",
+        "Not available"
+    )
+
+    name = metadata.get(
+        "name",
+        "Not available"
+    )
+
+    entry_type = metadata.get(
+        "type",
+        "Not available"
+    )
+
+    # -----------------------------------------------------
+    # Member database information
+    # -----------------------------------------------------
+
+    member_database = (
+        metadata
+        .get(
+            "source_database",
+            "InterPro"
+        )
+    )
+
+    # -----------------------------------------------------
+    # Location information
+    # -----------------------------------------------------
+
+    locations = match.get(
+        "entry_protein_locations",
+        []
+    )
+
+    regions = []
+
+    for location in locations:
+
+        fragments = location.get(
+            "fragments",
+            []
+        )
+
+        for fragment in fragments:
+
+            start = fragment.get(
+                "start"
+            )
+
+            end = fragment.get(
+                "end"
+            )
+
+            if (
+                start is not None
+                and end is not None
+            ):
+
+                regions.append(
+                    f"{start}-{end}"
+                )
+
+    if regions:
+
+        region_text = ", ".join(
+            regions
+        )
+
+    else:
+
+        region_text = "Not available"
+
+    return {
+        "InterPro_Accession": accession,
+        "InterPro_Name": name,
+        "InterPro_Type": entry_type,
+        "InterPro_Source": member_database,
+        "InterPro_Regions": region_text
+    }
+
+
+def annotate_uniprot_with_interpro(
+    uniprot_accession
+):
+
+    """
+    Retrieve all available InterPro
+    matches for one UniProt accession.
+    """
+
+    try:
+
+        if (
+            not uniprot_accession
+            or uniprot_accession
+            in [
+                "Not found",
+                "Error",
+                "Not available"
+            ]
+        ):
+
+            return []
+
+        matches = get_interpro_annotations(
+            uniprot_accession
+        )
+
+        if not matches:
+
+            return []
+
+        extracted_matches = []
+
+        for match in matches:
+
+            extracted = (
+                extract_interpro_match(
+                    match
+                )
+            )
+
+            extracted_matches.append(
+                extracted
+            )
+
+        return extracted_matches
+
+    except Exception:
+
+        return []
+
+
+# =========================================================
+# INTERPRO ANNOTATION
+# =========================================================
+
+st.header("10. InterPro Protein Domain Annotation")
+
+
+if significant_genes.empty:
+
+    st.info(
+        "InterPro annotation will appear when "
+        "significant genes are available."
+    )
+
+else:
+
+    st.write(
+        "InterPro is queried using the UniProt accession "
+        "identified in the previous stage."
+    )
+
+    if st.button(
+        "🔬 Annotate Proteins with InterPro"
+    ):
+
+        # -------------------------------------------------
+        # Check whether UniProt results exist
+        # -------------------------------------------------
+
+        if (
+            "uniprot_annotation"
+            not in st.session_state
+        ):
+
+            st.warning(
+                "Please run the UniProt annotation step "
+                "first."
+            )
+
+            st.stop()
+
+        uniprot_data = st.session_state[
+            "uniprot_annotation"
+        ].copy()
+
+        interpro_rows = []
+
+        progress_bar = st.progress(0)
+
+        status_text = st.empty()
+
+        total_genes = len(
+            uniprot_data
+        )
+
+        for index, row in uniprot_data.iterrows():
+
+            gene_id = row[
+                "Gene_ID"
+            ]
+
+            accession = row[
+                "UniProt_Accession"
+            ]
+
+            status_text.write(
+                f"Searching InterPro for "
+                f"{gene_id} ({accession})..."
+            )
+
+            matches = (
+                annotate_uniprot_with_interpro(
+                    accession
+                )
+            )
+
+            # -------------------------------------------------
+            # No matches
+            # -------------------------------------------------
+
+            if not matches:
+
+                interpro_rows.append({
+
+                    "Gene_ID": gene_id,
+
+                    "UniProt_Accession": accession,
+
+                    "InterPro_Accession":
+                        "No InterPro match",
+
+                    "InterPro_Name":
+                        "No InterPro match",
+
+                    "InterPro_Type":
+                        "Not available",
+
+                    "InterPro_Source":
+                        "Not available",
+
+                    "InterPro_Regions":
+                        "Not available"
+                })
+
+            else:
+
+                for match in matches:
+
+                    interpro_rows.append({
+
+                        "Gene_ID": gene_id,
+
+                        "UniProt_Accession":
+                            accession,
+
+                        **match
+                    })
+
+            progress_bar.progress(
+                (index + 1)
+                / total_genes
+            )
+
+            time.sleep(0.2)
+
+        status_text.success(
+            "InterPro annotation completed."
+        )
+
+        interpro_table = pd.DataFrame(
+            interpro_rows
+        )
+
+        # -------------------------------------------------
+        # Display results
+        # -------------------------------------------------
+
+        st.subheader(
+            "InterPro Annotation Results"
+        )
+
+        st.dataframe(
+            interpro_table,
+            use_container_width=True
+        )
+
+        # -------------------------------------------------
+        # Save results
+        # -------------------------------------------------
+
+        st.session_state[
+            "interpro_annotation"
+        ] = interpro_table
+
+
+# =========================================================
+# PIPELINE STATUS
+# =========================================================
+
+st.header("11. Current Pipeline Status")
 
 
 st.markdown(
     """
-### Pipeline completed so far
+### Current workflow
 
-**1. Expression data**
+**Expression Data**
 
 ↓
 
-**2. Differential expression**
+**Differential Expression**
 
 - Control mean
 - Treatment mean
@@ -1115,7 +1425,7 @@ st.markdown(
 
 ↓
 
-**3. Significant gene identification**
+**Significant Genes**
 
 - Upregulated
 - Downregulated
@@ -1123,34 +1433,38 @@ st.markdown(
 
 ↓
 
-**4. NCBI annotation**
+**NCBI**
 
-- NCBI Gene ID
+- Gene ID
 - Gene name
 - Description
 - Organism
 
 ↓
 
-**5. UniProt annotation**
+**UniProt**
 
-- UniProt accession
-- UniProt entry ID
+- Protein accession
 - Protein name
-- Organism
 - Protein length
 - Reviewed/unreviewed status
-- Function when available
+- Function
 
-### Next stage
+↓
 
-The next module will use the protein information to retrieve:
+**InterPro**
 
-**InterPro domains and protein families**
+- Protein family
+- Protein domain
+- InterPro accession
+- Source/signature information
+- Matching region
 
-After that, we will connect the annotated genes/proteins to:
+↓
 
-**KEGG pathways**
+### Next major stage
+
+**KEGG pathway mapping**
 """
 )
 
@@ -1159,7 +1473,7 @@ After that, we will connect the annotated genes/proteins to:
 # DOWNLOAD DIFFERENTIAL EXPRESSION RESULTS
 # =========================================================
 
-st.header("11. Download Results")
+st.header("12. Download Results")
 
 
 csv_data = results.to_csv(

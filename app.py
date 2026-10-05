@@ -3,13 +3,12 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-
 from scipy.stats import ttest_ind
 
 
-# =========================================================
+# ============================================================
 # PAGE CONFIGURATION
-# =========================================================
+# ============================================================
 
 st.set_page_config(
     page_title="Transcriptomics KEGG Pipeline",
@@ -18,9 +17,9 @@ st.set_page_config(
 )
 
 
-# =========================================================
+# ============================================================
 # TITLE
-# =========================================================
+# ============================================================
 
 st.title("🧬 Transcriptomics & KEGG Pathway Analyzer")
 
@@ -30,35 +29,34 @@ st.write(
 )
 
 
-# =========================================================
-# LOAD EXPRESSION DATA
-# =========================================================
+# ============================================================
+# LOAD DATA
+# ============================================================
 
-st.header("1. Expression Data")
+st.header("1. Transcriptomics Data")
 
 try:
-
     data = pd.read_csv("dummy_data.csv")
 
-except FileNotFoundError:
+    st.success("Transcriptomics data loaded successfully.")
+
+    st.dataframe(
+        data,
+        use_container_width=True
+    )
+
+except Exception as e:
 
     st.error(
-        "dummy_data.csv was not found. "
-        "Please make sure the file is present in the repository."
+        f"Unable to load dummy_data.csv: {e}"
     )
 
     st.stop()
 
 
-st.dataframe(
-    data,
-    use_container_width=True
-)
-
-
-# =========================================================
-# EXPERIMENTAL GROUPS
-# =========================================================
+# ============================================================
+# DEFINE EXPERIMENTAL GROUPS
+# ============================================================
 
 control_columns = [
     "Control_1",
@@ -73,9 +71,9 @@ treatment_columns = [
 ]
 
 
-# =========================================================
+# ============================================================
 # CHECK REQUIRED COLUMNS
-# =========================================================
+# ============================================================
 
 required_columns = (
     ["Gene_ID"]
@@ -99,56 +97,51 @@ if missing_columns:
     st.stop()
 
 
-# =========================================================
-# EXPRESSION STATISTICS
-# =========================================================
+# ============================================================
+# DIFFERENTIAL EXPRESSION
+# ============================================================
 
-st.header("2. Expression Statistics")
+st.header("2. Differential Expression Analysis")
 
+
+# ------------------------------------------------------------
+# Calculate group means
+# ------------------------------------------------------------
 
 data["Control_Mean"] = data[
     control_columns
 ].mean(axis=1)
-
 
 data["Treatment_Mean"] = data[
     treatment_columns
 ].mean(axis=1)
 
 
+# ------------------------------------------------------------
+# Fold change
+# ------------------------------------------------------------
+
+# Avoid division by zero
 data["Fold_Change"] = (
     data["Treatment_Mean"]
-    / data["Control_Mean"]
+    / data["Control_Mean"].replace(0, np.nan)
 )
 
 
-data["Fold_Change"] = data[
-    "Fold_Change"
-].replace(
-    [np.inf, -np.inf],
-    np.nan
-)
-
+# ------------------------------------------------------------
+# Log2 fold change
+# ------------------------------------------------------------
 
 data["Log2_Fold_Change"] = np.log2(
     data["Fold_Change"]
 )
 
 
-# =========================================================
-# DIFFERENTIAL EXPRESSION
-# =========================================================
-
-st.header("3. Differential Expression Analysis")
-
-st.write(
-    "For this prototype, Welch's two-sample t-test "
-    "is used to compare control and treatment replicates."
-)
-
+# ============================================================
+# WELCH'S T-TEST
+# ============================================================
 
 p_values = []
-
 
 for _, row in data.iterrows():
 
@@ -160,23 +153,28 @@ for _, row in data.iterrows():
         treatment_columns
     ].astype(float).values
 
-    test_result = ttest_ind(
-        treatment_values,
-        control_values,
-        equal_var=False
-    )
+    try:
 
-    p_values.append(
-        test_result.pvalue
-    )
+        statistic, p_value = ttest_ind(
+            treatment_values,
+            control_values,
+            equal_var=False,
+            nan_policy="omit"
+        )
+
+    except Exception:
+
+        p_value = np.nan
+
+    p_values.append(p_value)
 
 
 data["P_Value"] = p_values
 
 
-# =========================================================
+# ============================================================
 # BENJAMINI-HOCHBERG FDR
-# =========================================================
+# ============================================================
 
 def benjamini_hochberg(p_values):
 
@@ -185,77 +183,71 @@ def benjamini_hochberg(p_values):
         dtype=float
     )
 
-    n = len(p_values)
-
-    order = np.argsort(
-        p_values
+    adjusted = np.full(
+        len(p_values),
+        np.nan
     )
 
-    sorted_p_values = p_values[
-        order
-    ]
+    valid = ~np.isnan(p_values)
 
-    adjusted = np.empty(n)
+    if valid.sum() == 0:
+        return adjusted
 
-    previous = 1.0
+    valid_p = p_values[valid]
 
-    for i in range(
-        n - 1,
-        -1,
-        -1
-    ):
+    order = np.argsort(valid_p)
 
-        rank = i + 1
+    ranked = valid_p[order]
 
-        adjusted_value = (
-            sorted_p_values[i]
-            * n
-            / rank
-        )
+    n = len(ranked)
 
-        adjusted_value = min(
-            adjusted_value,
-            previous
-        )
+    adjusted_ranked = (
+        ranked
+        * n
+        / np.arange(1, n + 1)
+    )
 
-        adjusted[i] = adjusted_value
+    adjusted_ranked = np.minimum.accumulate(
+        adjusted_ranked[::-1]
+    )[::-1]
 
-        previous = adjusted_value
+    adjusted_ranked = np.minimum(
+        adjusted_ranked,
+        1.0
+    )
 
     result = np.empty(n)
 
-    result[order] = adjusted
+    result[order] = adjusted_ranked
 
-    return result
+    adjusted[valid] = result
+
+    return adjusted
 
 
 data["Adjusted_P_Value"] = (
     benjamini_hochberg(
-        data["P_Value"]
+        data["P_Value"].values
     )
 )
 
 
-# =========================================================
+# ============================================================
 # SIGNIFICANCE THRESHOLDS
-# =========================================================
+# ============================================================
 
-st.header("4. Significance Classification")
-
+st.subheader("Significance Thresholds")
 
 col1, col2 = st.columns(2)
-
 
 with col1:
 
     log2fc_threshold = st.number_input(
-        "Absolute log₂ Fold Change threshold",
+        "Absolute log2 Fold Change threshold",
         min_value=0.0,
-        max_value=10.0,
         value=1.0,
         step=0.1
     )
-
 
 with col2:
 
@@ -268,30 +260,29 @@ with col2:
     )
 
 
-# =========================================================
+# ============================================================
 # CLASSIFY GENES
-# =========================================================
+# ============================================================
 
 def classify_gene(row):
 
-    log2fc = row[
-        "Log2_Fold_Change"
-    ]
+    log2fc = row["Log2_Fold_Change"]
+    adjusted_p = row["Adjusted_P_Value"]
 
-    adjusted_p = row[
-        "Adjusted_P_Value"
-    ]
+    if pd.isna(log2fc) or pd.isna(adjusted_p):
+
+        return "Not significant"
 
     if (
-        adjusted_p < adjusted_p_threshold
-        and log2fc >= log2fc_threshold
+        log2fc >= log2fc_threshold
+        and adjusted_p <= adjusted_p_threshold
     ):
 
         return "Upregulated"
 
     elif (
-        adjusted_p < adjusted_p_threshold
-        and log2fc <= -log2fc_threshold
+        log2fc <= -log2fc_threshold
+        and adjusted_p <= adjusted_p_threshold
     ):
 
         return "Downregulated"
@@ -307,14 +298,15 @@ data["Regulation"] = data.apply(
 )
 
 
-# =========================================================
-# DIFFERENTIAL EXPRESSION RESULTS
-# =========================================================
+# ============================================================
+# DISPLAY DIFFERENTIAL EXPRESSION RESULTS
+# ============================================================
 
-st.header("5. Differential Expression Results")
+st.subheader(
+    "Differential Expression Results"
+)
 
-
-results_columns = [
+display_columns = [
     "Gene_ID",
     "Control_Mean",
     "Treatment_Mean",
@@ -325,398 +317,353 @@ results_columns = [
     "Regulation"
 ]
 
-
-results = data[
-    results_columns
-].copy()
-
-
-numeric_columns = [
-    "Control_Mean",
-    "Treatment_Mean",
-    "Fold_Change",
-    "Log2_Fold_Change",
-    "P_Value",
-    "Adjusted_P_Value"
-]
-
-
-results[numeric_columns] = (
-    results[numeric_columns].round(4)
-)
-
-
 st.dataframe(
-    results,
+    data[display_columns],
     use_container_width=True
 )
 
 
-# =========================================================
+# ============================================================
 # SUMMARY
-# =========================================================
+# ============================================================
 
-st.header("6. Differential Expression Summary")
+st.header("3. Differential Expression Summary")
 
-
-upregulated = (
-    data["Regulation"]
-    == "Upregulated"
+upregulated_count = (
+    data["Regulation"] == "Upregulated"
 ).sum()
 
-
-downregulated = (
-    data["Regulation"]
-    == "Downregulated"
+downregulated_count = (
+    data["Regulation"] == "Downregulated"
 ).sum()
 
-
-not_significant = (
-    data["Regulation"]
-    == "Not significant"
+not_significant_count = (
+    data["Regulation"] == "Not significant"
 ).sum()
 
 
 col1, col2, col3 = st.columns(3)
 
-
 with col1:
 
     st.metric(
-        "Upregulated genes",
-        upregulated
+        "Upregulated",
+        int(upregulated_count)
     )
-
 
 with col2:
 
     st.metric(
-        "Downregulated genes",
-        downregulated
+        "Downregulated",
+        int(downregulated_count)
     )
-
 
 with col3:
 
     st.metric(
-        "Not significant",
-        not_significant
+        "Not Significant",
+        int(not_significant_count)
     )
 
 
-# =========================================================
+# ============================================================
 # SIGNIFICANT GENES
-# =========================================================
+# ============================================================
 
-st.header("7. Significant Genes")
+st.header("4. Significant Genes")
 
-
-significant_genes = data[
-    data["Regulation"]
-    != "Not significant"
+significant_data = data[
+    data["Regulation"].isin(
+        [
+            "Upregulated",
+            "Downregulated"
+        ]
+    )
 ].copy()
 
 
-if significant_genes.empty:
+if significant_data.empty:
 
-    st.info(
-        "No genes meet the current significance thresholds."
+    st.warning(
+        "No significant genes found using the current thresholds."
     )
 
 else:
 
-    significant_columns = [
-        "Gene_ID",
-        "Log2_Fold_Change",
-        "P_Value",
-        "Adjusted_P_Value",
-        "Regulation"
-    ]
-
-    significant_display = (
-        significant_genes[
-            significant_columns
-        ].copy()
-    )
-
-    significant_display[
-        [
-            "Log2_Fold_Change",
-            "P_Value",
-            "Adjusted_P_Value"
-        ]
-    ] = (
-        significant_display[
+    st.dataframe(
+        significant_data[
             [
+                "Gene_ID",
                 "Log2_Fold_Change",
                 "P_Value",
-                "Adjusted_P_Value"
+                "Adjusted_P_Value",
+                "Regulation"
             ]
-        ].round(4)
-    )
-
-    st.dataframe(
-        significant_display,
+        ],
         use_container_width=True
     )
 
 
-# =========================================================
-# NCBI API
-# =========================================================
+# ============================================================
+# DOWNLOAD DIFFERENTIAL EXPRESSION RESULTS
+# ============================================================
+
+csv_data = data.to_csv(
+    index=False
+).encode("utf-8")
+
+
+st.download_button(
+    label="⬇️ Download Differential Expression Results",
+    data=csv_data,
+    file_name="differential_expression_results.csv",
+    mime="text/csv"
+)
+
+
+# ============================================================
+# NCBI ANNOTATION
+# ============================================================
+
+st.header("6. NCBI Gene Annotation")
+
 
 NCBI_BASE_URL = (
-    "https://eutils.ncbi.nlm.nih.gov/"
-    "entrez/eutils/"
+    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 )
 
 
 def search_ncbi_gene(gene_id):
 
-    params = {
-        "db": "gene",
-        "term": f'"{gene_id}"[All Fields]',
-        "retmode": "json",
-        "retmax": 10
-    }
-
-    response = requests.get(
-        NCBI_BASE_URL + "esearch.fcgi",
-        params=params,
-        timeout=20
+    search_url = (
+        NCBI_BASE_URL
+        + "esearch.fcgi"
     )
-
-    response.raise_for_status()
-
-    result = response.json()
-
-    ids = result.get(
-        "esearchresult",
-        {}
-    ).get(
-        "idlist",
-        []
-    )
-
-    return ids
-
-
-def get_ncbi_gene_summary(gene_uid):
 
     params = {
         "db": "gene",
-        "id": gene_uid,
+        "term": (
+            f'"{gene_id}"[All Fields] '
+            f'AND "Arabidopsis thaliana"[Organism]'
+        ),
         "retmode": "json"
     }
 
     response = requests.get(
-        NCBI_BASE_URL + "esummary.fcgi",
+        search_url,
         params=params,
-        timeout=20
+        timeout=30
     )
 
     response.raise_for_status()
 
-    result = response.json()
+    data_json = response.json()
 
-    document = result.get(
+    id_list = (
+        data_json
+        .get("esearchresult", {})
+        .get("idlist", [])
+    )
+
+    if not id_list:
+
+        return None
+
+    return id_list[0]
+
+
+def get_ncbi_gene_summary(gene_id):
+
+    ncbi_id = search_ncbi_gene(
+        gene_id
+    )
+
+    if ncbi_id is None:
+
+        return {
+            "NCBI_Gene_ID": "Not found",
+            "Gene_Name": "Not found",
+            "Gene_Description": "Not found",
+            "Organism": "Not found",
+            "Chromosome": "Not found",
+            "NCBI_Status": "No match"
+        }
+
+    summary_url = (
+        NCBI_BASE_URL
+        + "esummary.fcgi"
+    )
+
+    params = {
+        "db": "gene",
+        "id": ncbi_id,
+        "retmode": "json"
+    }
+
+    response = requests.get(
+        summary_url,
+        params=params,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    summary_data = response.json()
+
+    result = summary_data.get(
         "result",
         {}
-    ).get(
-        str(gene_uid),
+    )
+
+    record = result.get(
+        str(ncbi_id),
         {}
     )
 
-    return document
+    return {
+        "NCBI_Gene_ID": ncbi_id,
 
+        "Gene_Name": record.get(
+            "name",
+            "Not available"
+        ),
 
-def annotate_gene_ncbi(gene_id):
+        "Gene_Description": record.get(
+            "description",
+            "Not available"
+        ),
 
-    try:
-
-        ids = search_ncbi_gene(
-            gene_id
-        )
-
-        if not ids:
-
-            return {
-                "NCBI_Gene_ID": "Not found",
-                "Gene_Name": "Not found",
-                "Gene_Description": "Not found",
-                "Organism": "Not found",
-                "Chromosome": "Not available",
-                "NCBI_Status": "Not found"
-            }
-
-        ncbi_uid = ids[0]
-
-        summary = get_ncbi_gene_summary(
-            ncbi_uid
-        )
-
-        return {
-            "NCBI_Gene_ID": summary.get(
-                "uid",
-                ncbi_uid
-            ),
-
-            "Gene_Name": summary.get(
-                "name",
+        "Organism": record.get(
+            "organism",
+            {}).get(
+                "scientificname",
                 "Not available"
             ),
 
-            "Gene_Description": summary.get(
-                "description",
-                "Not available"
-            ),
+        "Chromosome": record.get(
+            "chromosome",
+            "Not available"
+        ),
 
-            "Organism": summary.get(
-                "organism",
-                {}).get(
-                    "scientificname",
-                    "Not available"
-                ),
-
-            "Chromosome": summary.get(
-                "chromosome",
-                "Not available"
-            ),
-
-            "NCBI_Status": summary.get(
-                "status",
-                "Not available"
-            )
-        }
-
-    except Exception as error:
-
-        return {
-            "NCBI_Gene_ID": "Error",
-            "Gene_Name": "Error",
-            "Gene_Description": str(error),
-            "Organism": "Error",
-            "Chromosome": "Error",
-            "NCBI_Status": "Error"
-        }
+        "NCBI_Status": "Annotated"
+    }
 
 
-# =========================================================
-# NCBI ANNOTATION
-# =========================================================
+# ============================================================
+# NCBI ANNOTATION BUTTON
+# ============================================================
 
-st.header("8. NCBI Gene Annotation")
-
-
-if significant_genes.empty:
-
-    st.info(
-        "NCBI annotation will appear when significant genes "
-        "are available."
-    )
-
-else:
+if not significant_data.empty:
 
     if st.button(
         "🔎 Annotate Significant Genes with NCBI"
     ):
 
-        annotation_results = []
+        ncbi_results = []
 
         progress_bar = st.progress(0)
 
-        status_text = st.empty()
-
-        total_genes = len(
-            significant_genes
+        total = len(
+            significant_data
         )
 
-        for index, gene_id in enumerate(
-            significant_genes["Gene_ID"]
+        for index, (_, row) in enumerate(
+            significant_data.iterrows()
         ):
 
-            status_text.write(
-                f"Annotating {gene_id}..."
-            )
+            gene_id = row[
+                "Gene_ID"
+            ]
 
-            annotation = annotate_gene_ncbi(
-                str(gene_id)
-            )
+            try:
 
-            annotation["Gene_ID"] = gene_id
+                annotation = (
+                    get_ncbi_gene_summary(
+                        gene_id
+                    )
+                )
 
-            annotation_results.append(
+            except Exception as e:
+
+                annotation = {
+                    "NCBI_Gene_ID": "API error",
+                    "Gene_Name": "API error",
+                    "Gene_Description": str(e),
+                    "Organism": "API error",
+                    "Chromosome": "API error",
+                    "NCBI_Status": "Error"
+                }
+
+            annotation[
+                "Gene_ID"
+            ] = gene_id
+
+            ncbi_results.append(
                 annotation
             )
 
             progress_bar.progress(
-                (index + 1) / total_genes
+                (index + 1) / total
             )
 
-            time.sleep(0.35)
+            time.sleep(0.2)
 
-        status_text.success(
-            "NCBI annotation completed."
-        )
-
-        ncbi_results = pd.DataFrame(
-            annotation_results
-        )
-
-        annotation_table = (
-            significant_genes[
-                [
-                    "Gene_ID",
-                    "Log2_Fold_Change",
-                    "P_Value",
-                    "Adjusted_P_Value",
-                    "Regulation"
-                ]
-            ]
-            .merge(
-                ncbi_results,
-                on="Gene_ID",
-                how="left"
-            )
-        )
-
-        st.subheader(
-            "NCBI Annotation Results"
-        )
-
-        st.dataframe(
-            annotation_table,
-            use_container_width=True
+        ncbi_df = pd.DataFrame(
+            ncbi_results
         )
 
         st.session_state[
             "ncbi_annotation"
-        ] = annotation_table
+        ] = ncbi_df
+
+        st.success(
+            "NCBI annotation completed."
+        )
 
 
-# =========================================================
-# UNIPROT API
-# =========================================================
+# ============================================================
+# DISPLAY NCBI RESULTS
+# ============================================================
 
-UNIPROT_SEARCH_URL = (
+if "ncbi_annotation" in st.session_state:
+
+    st.subheader(
+        "NCBI Annotation Results"
+    )
+
+    st.dataframe(
+        st.session_state[
+            "ncbi_annotation"
+        ],
+        use_container_width=True
+    )
+
+
+# ============================================================
+# UNIPROT ANNOTATION
+# ============================================================
+
+st.header("8. UniProt Protein Annotation")
+
+
+UNIPROT_BASE_URL = (
     "https://rest.uniprot.org/uniprotkb/search"
 )
 
 
-def search_uniprot_gene(
-    gene_id,
-    organism_id="3702"
+def get_uniprot_annotations(
+    gene_id
 ):
 
-    query = (
-        f'gene_exact:{gene_id} '
-        f'AND organism_id:{organism_id}'
-    )
-
     params = {
-        "query": query,
+
+        "query": (
+            f"gene_exact:{gene_id} "
+            f"AND organism_id:3702"
+        ),
+
         "format": "json",
-        "size": 10,
+
         "fields": (
             "accession,"
             "id,"
@@ -726,321 +673,308 @@ def search_uniprot_gene(
             "length,"
             "reviewed,"
             "cc_function"
-        )
+        ),
+
+        "size": 20
     }
 
     response = requests.get(
-        UNIPROT_SEARCH_URL,
+        UNIPROT_BASE_URL,
         params=params,
         timeout=30
     )
 
     response.raise_for_status()
 
-    return response.json()
-
-
-def extract_protein_name(entry):
-
-    try:
-
-        protein_description = entry.get(
-            "proteinDescription",
-            {}
-        )
-
-        recommended = (
-            protein_description
-            .get(
-                "recommendedName",
-                {}
-            )
-            .get(
-                "fullName",
-                {}
-            )
-            .get(
-                "value"
-            )
-        )
-
-        if recommended:
-
-            return recommended
-
-        submitted = (
-            protein_description
-            .get(
-                "submittedName",
-                []
-            )
-        )
-
-        if submitted:
-
-            return (
-                submitted[0]
-                .get("fullName", {})
-                .get("value", "Not available")
-            )
-
-    except Exception:
-
-        pass
-
-    return "Not available"
-
-
-def extract_function(entry):
-
-    try:
-
-        comments = entry.get(
-            "comments",
-            []
-        )
-
-        for comment in comments:
-
-            if comment.get(
-                "commentType"
-            ) == "FUNCTION":
-
-                texts = comment.get(
-                    "texts",
-                    []
-                )
-
-                if texts:
-
-                    return texts[0].get(
-                        "value",
-                        "Not available"
-                    )
-
-    except Exception:
-
-        pass
-
-    return "Not available"
-
-
-def get_uniprot_annotation(gene_id):
-
-    try:
-
-        result = search_uniprot_gene(
-            gene_id
-        )
-
-        entries = result.get(
-            "results",
-            []
-        )
-
-        if not entries:
-
-            return {
-                "UniProt_Accession": "Not found",
-                "UniProt_ID": "Not found",
-                "UniProt_Protein": "Not found",
-                "UniProt_Organism": "Not found",
-                "Protein_Length": "Not available",
-                "UniProt_Reviewed": "Not available",
-                "UniProt_Function": "Not available",
-                "UniProt_Status": "Not found"
-            }
-
-        reviewed_entries = [
-            entry
-            for entry in entries
-            if entry.get(
-                "entryType"
-            ) == "UniProtKB reviewed (Swiss-Prot)"
-        ]
-
-        if reviewed_entries:
-
-            entry = reviewed_entries[0]
-
-        else:
-
-            entry = entries[0]
-
-        accession = entry.get(
-            "primaryAccession",
-            "Not available"
-        )
-
-        entry_id = entry.get(
-            "uniProtkbId",
-            "Not available"
-        )
-
-        organism = (
-            entry.get(
-                "organism",
-                {}
-            )
-            .get(
-                "scientificName",
-                "Not available"
-            )
-        )
-
-        protein_length = (
-            entry.get(
-                "sequence",
-                {}
-            )
-            .get(
-                "length",
-                "Not available"
-            )
-        )
-
-        entry_type = entry.get(
-            "entryType",
-            "Not available"
-        )
-
-        if "reviewed" in entry_type.lower():
-
-            reviewed_status = "Reviewed"
-
-        else:
-
-            reviewed_status = "Unreviewed"
-
-        protein_name = extract_protein_name(
-            entry
-        )
-
-        function = extract_function(
-            entry
-        )
-
-        return {
-            "UniProt_Accession": accession,
-            "UniProt_ID": entry_id,
-            "UniProt_Protein": protein_name,
-            "UniProt_Organism": organism,
-            "Protein_Length": protein_length,
-            "UniProt_Reviewed": reviewed_status,
-            "UniProt_Function": function,
-            "UniProt_Status": "Found"
-        }
-
-    except Exception as error:
-
-        return {
-            "UniProt_Accession": "Error",
-            "UniProt_ID": "Error",
-            "UniProt_Protein": "Error",
-            "UniProt_Organism": "Error",
-            "Protein_Length": "Error",
-            "UniProt_Reviewed": "Error",
-            "UniProt_Function": str(error),
-            "UniProt_Status": "Error"
-        }
-
-
-# =========================================================
-# UNIPROT ANNOTATION
-# =========================================================
-
-st.header("9. UniProt Protein Annotation")
-
-
-if significant_genes.empty:
-
-    st.info(
-        "UniProt annotation will appear when significant "
-        "genes are available."
+    results = response.json().get(
+        "results",
+        []
     )
 
-else:
+    if not results:
 
-    if st.button(
-        "🧬 Annotate Significant Genes with UniProt"
-    ):
+        return {
+            "UniProt_Accession": "Not found",
+            "UniProt_ID": "Not found",
+            "UniProt_Protein": "Not found",
+            "UniProt_Organism": "Not found",
+            "Protein_Length": "Not found",
+            "UniProt_Reviewed": "Not found",
+            "UniProt_Function": "Not found",
+            "UniProt_Status": "No match"
+        }
 
-        uniprot_results = []
+    # --------------------------------------------------------
+    # Prefer reviewed / Swiss-Prot entry
+    # --------------------------------------------------------
 
-        progress_bar = st.progress(0)
+    reviewed_results = [
+        result
+        for result in results
+        if result.get("entryType") == "UniProtKB reviewed (Swiss-Prot)"
+    ]
 
-        status_text = st.empty()
+    if reviewed_results:
 
-        total_genes = len(
-            significant_genes
-        )
+        record = reviewed_results[0]
 
-        for index, gene_id in enumerate(
-            significant_genes["Gene_ID"]
+    else:
+
+        record = results[0]
+
+
+    # --------------------------------------------------------
+    # Basic fields
+    # --------------------------------------------------------
+
+    accession = record.get(
+        "primaryAccession",
+        "Not available"
+    )
+
+    entry_id = record.get(
+        "uniProtkbId",
+        "Not available"
+    )
+
+
+    # --------------------------------------------------------
+    # Protein name
+    # --------------------------------------------------------
+
+    protein_description = record.get(
+        "proteinDescription",
+        {}
+    )
+
+    recommended_name = (
+        protein_description
+        .get("recommendedName", {})
+    )
+
+    protein_name = recommended_name.get(
+        "fullName",
+        {}
+    ).get(
+        "value",
+        "Not available"
+    )
+
+
+    # --------------------------------------------------------
+    # Organism
+    # --------------------------------------------------------
+
+    organism = record.get(
+        "organism",
+        {}
+    )
+
+    organism_name = organism.get(
+        "scientificName",
+        "Not available"
+    )
+
+
+    # --------------------------------------------------------
+    # Protein length
+    # --------------------------------------------------------
+
+    protein_length = record.get(
+        "sequence",
+        {}
+    ).get(
+        "length",
+        "Not available"
+    )
+
+
+    # --------------------------------------------------------
+    # Reviewed status
+    # --------------------------------------------------------
+
+    reviewed = (
+        record.get("entryType")
+        == "UniProtKB reviewed (Swiss-Prot)"
+    )
+
+
+    # --------------------------------------------------------
+    # Function annotation
+    # --------------------------------------------------------
+
+    comments = record.get(
+        "comments",
+        []
+    )
+
+    function_text = "Not available"
+
+    for comment in comments:
+
+        if comment.get("commentType") == "FUNCTION":
+
+            texts = comment.get(
+                "texts",
+                []
+            )
+
+            if texts:
+
+                function_text = texts[0].get(
+                    "value",
+                    "Not available"
+                )
+
+                break
+
+
+    return {
+
+        "UniProt_Accession":
+            accession,
+
+        "UniProt_ID":
+            entry_id,
+
+        "UniProt_Protein":
+            protein_name,
+
+        "UniProt_Organism":
+            organism_name,
+
+        "Protein_Length":
+            protein_length,
+
+        "UniProt_Reviewed":
+            reviewed,
+
+        "UniProt_Function":
+            function_text,
+
+        "UniProt_Status":
+            "Annotated"
+    }
+
+
+# ============================================================
+# UNIPROT ANNOTATION BUTTON
+# ============================================================
+
+if "ncbi_annotation" in st.session_state:
+
+    if not significant_data.empty:
+
+        if st.button(
+            "🧬 Annotate Significant Genes with UniProt"
         ):
 
-            status_text.write(
-                f"Searching UniProt for {gene_id}..."
+            uniprot_results = []
+
+            progress_bar = st.progress(0)
+
+            total = len(
+                significant_data
             )
 
-            annotation = get_uniprot_annotation(
-                str(gene_id)
-            )
+            for index, (_, row) in enumerate(
+                significant_data.iterrows()
+            ):
 
-            annotation["Gene_ID"] = gene_id
-
-            uniprot_results.append(
-                annotation
-            )
-
-            progress_bar.progress(
-                (index + 1) / total_genes
-            )
-
-            time.sleep(0.2)
-
-        status_text.success(
-            "UniProt annotation completed."
-        )
-
-        uniprot_table = pd.DataFrame(
-            uniprot_results
-        )
-
-        uniprot_display = (
-            significant_genes[
-                [
-                    "Gene_ID",
-                    "Log2_Fold_Change",
-                    "P_Value",
-                    "Adjusted_P_Value",
-                    "Regulation"
+                gene_id = row[
+                    "Gene_ID"
                 ]
-            ]
-            .merge(
-                uniprot_table,
-                on="Gene_ID",
-                how="left"
+
+                try:
+
+                    annotation = (
+                        get_uniprot_annotations(
+                            gene_id
+                        )
+                    )
+
+                except Exception as e:
+
+                    annotation = {
+
+                        "UniProt_Accession":
+                            "API error",
+
+                        "UniProt_ID":
+                            "API error",
+
+                        "UniProt_Protein":
+                            str(e),
+
+                        "UniProt_Organism":
+                            "API error",
+
+                        "Protein_Length":
+                            "API error",
+
+                        "UniProt_Reviewed":
+                            "API error",
+
+                        "UniProt_Function":
+                            "API error",
+
+                        "UniProt_Status":
+                            "Error"
+                    }
+
+                annotation[
+                    "Gene_ID"
+                ] = gene_id
+
+                uniprot_results.append(
+                    annotation
+                )
+
+                progress_bar.progress(
+                    (index + 1) / total
+                )
+
+                time.sleep(0.2)
+
+            uniprot_df = pd.DataFrame(
+                uniprot_results
             )
-        )
 
-        st.subheader(
-            "UniProt Annotation Results"
-        )
+            st.session_state[
+                "uniprot_annotation"
+            ] = uniprot_df
 
-        st.dataframe(
-            uniprot_display,
-            use_container_width=True
-        )
+            st.success(
+                "UniProt annotation completed."
+            )
 
+
+# ============================================================
+# DISPLAY UNIPROT RESULTS
+# ============================================================
+
+if "uniprot_annotation" in st.session_state:
+
+    st.subheader(
+        "UniProt Annotation Results"
+    )
+
+    st.dataframe(
         st.session_state[
             "uniprot_annotation"
-        ] = uniprot_display
+        ],
+        use_container_width=True
+    )
 
 
-# =========================================================
-# INTERPRO API
-# =========================================================
+# ============================================================
+# INTERPRO ANNOTATION
+# ============================================================
+
+st.header(
+    "10. InterPro Protein Domain Annotation"
+)
+
 
 INTERPRO_BASE_URL = (
     "https://www.ebi.ac.uk/interpro/api"
@@ -1050,58 +984,106 @@ INTERPRO_BASE_URL = (
 def get_interpro_annotations(
     uniprot_accession
 ):
-
     """
-    Retrieve InterPro entries associated with
-    a UniProt protein.
-
-    The InterPro protein endpoint returns
-    protein-to-entry matches.
+    Retrieve InterPro entries associated
+    with a UniProt protein.
     """
 
     url = (
-        INTERPRO_BASE_URL
-        + "/protein/UniProt/"
-        + str(uniprot_accession)
-        + "/entry/InterPro/"
+        f"{INTERPRO_BASE_URL}"
+        f"/entry/interpro/protein/uniprot/"
+        f"{uniprot_accession}/"
     )
 
     params = {
-        "format": "json",
         "page_size": 200
+    }
+
+    headers = {
+        "Accept": "application/json"
     }
 
     response = requests.get(
         url,
         params=params,
-        timeout=30
+        headers=headers,
+        timeout=60
     )
+
+    # --------------------------------------------------------
+    # No data
+    # --------------------------------------------------------
+
+    if response.status_code == 204:
+
+        return []
+
+
+    # --------------------------------------------------------
+    # Protein not found
+    # --------------------------------------------------------
 
     if response.status_code == 404:
 
         return []
 
+
     response.raise_for_status()
 
-    result = response.json()
+    data_json = response.json()
 
-    return result.get(
+    all_results = data_json.get(
         "results",
         []
     )
 
 
+    # --------------------------------------------------------
+    # Handle pagination
+    # --------------------------------------------------------
+
+    next_url = data_json.get(
+        "next"
+    )
+
+    while next_url:
+
+        next_response = requests.get(
+            next_url,
+            headers=headers,
+            timeout=60
+        )
+
+        if next_response.status_code != 200:
+            break
+
+        next_data = (
+            next_response.json()
+        )
+
+        all_results.extend(
+            next_data.get(
+                "results",
+                []
+            )
+        )
+
+        next_url = next_data.get(
+            "next"
+        )
+
+        time.sleep(0.2)
+
+
+    return all_results
+
+
 def extract_interpro_match(
     match
 ):
-
     """
-    Extract useful information from
-    an InterPro API result.
-
-    The API structure can contain
-    metadata plus protein-location
-    information.
+    Extract InterPro metadata and
+    protein match regions.
     """
 
     metadata = match.get(
@@ -1109,69 +1091,137 @@ def extract_interpro_match(
         {}
     )
 
+
+    # --------------------------------------------------------
+    # InterPro accession
+    # --------------------------------------------------------
+
     accession = metadata.get(
         "accession",
         "Not available"
     )
+
+
+    # --------------------------------------------------------
+    # InterPro name
+    # --------------------------------------------------------
 
     name = metadata.get(
         "name",
         "Not available"
     )
 
+    # Some API responses may return
+    # name as a dictionary.
+
+    if isinstance(name, dict):
+
+        name = name.get(
+            "name",
+            "Not available"
+        )
+
+
+    # --------------------------------------------------------
+    # Entry type
+    # --------------------------------------------------------
+
     entry_type = metadata.get(
         "type",
         "Not available"
     )
 
-    # -----------------------------------------------------
-    # Member database information
-    # -----------------------------------------------------
 
-    member_database = (
-        metadata
-        .get(
-            "source_database",
-            "InterPro"
+    # --------------------------------------------------------
+    # Source database
+    # --------------------------------------------------------
+
+    source_database = metadata.get(
+        "source_database"
+    )
+
+    if source_database:
+
+        source_text = str(
+            source_database
         )
-    )
 
-    # -----------------------------------------------------
-    # Location information
-    # -----------------------------------------------------
+    else:
 
-    locations = match.get(
-        "entry_protein_locations",
-        []
-    )
+        member_databases = metadata.get(
+            "member_databases"
+        )
+
+        if isinstance(
+            member_databases,
+            dict
+        ) and member_databases:
+
+            source_text = ", ".join(
+                member_databases.keys()
+            )
+
+        else:
+
+            source_text = "InterPro"
+
+
+    # --------------------------------------------------------
+    # Protein locations
+    # --------------------------------------------------------
 
     regions = []
 
-    for location in locations:
 
-        fragments = location.get(
-            "fragments",
+    # IMPORTANT:
+    # The protein locations are nested
+    # under match["proteins"].
+
+    proteins = match.get(
+        "proteins",
+        []
+    )
+
+
+    for protein in proteins:
+
+        locations = protein.get(
+            "entry_protein_locations",
             []
         )
 
-        for fragment in fragments:
+        for location in locations:
 
-            start = fragment.get(
-                "start"
+            fragments = location.get(
+                "fragments",
+                []
             )
 
-            end = fragment.get(
-                "end"
-            )
+            for fragment in fragments:
 
-            if (
-                start is not None
-                and end is not None
-            ):
-
-                regions.append(
-                    f"{start}-{end}"
+                start = fragment.get(
+                    "start"
                 )
+
+                end = fragment.get(
+                    "end"
+                )
+
+                if (
+                    start is not None
+                    and end is not None
+                ):
+
+                    regions.append(
+                        f"{start}-{end}"
+                    )
+
+
+    # Remove duplicate regions
+    regions = list(
+        dict.fromkeys(regions)
+    )
+
 
     if regions:
 
@@ -1181,162 +1231,149 @@ def extract_interpro_match(
 
     else:
 
-        region_text = "Not available"
+        region_text = "Not provided"
+
 
     return {
-        "InterPro_Accession": accession,
-        "InterPro_Name": name,
-        "InterPro_Type": entry_type,
-        "InterPro_Source": member_database,
-        "InterPro_Regions": region_text
+
+        "InterPro_Accession":
+            accession,
+
+        "InterPro_Name":
+            name,
+
+        "InterPro_Type":
+            entry_type,
+
+        "InterPro_Source":
+            source_text,
+
+        "InterPro_Regions":
+            region_text
     }
 
 
 def annotate_uniprot_with_interpro(
     uniprot_accession
 ):
-
     """
-    Retrieve all available InterPro
-    matches for one UniProt accession.
+    Retrieve all InterPro annotations
+    for one UniProt protein.
     """
 
-    try:
-
-        if (
-            not uniprot_accession
-            or uniprot_accession
-            in [
-                "Not found",
-                "Error",
-                "Not available"
-            ]
-        ):
-
-            return []
-
-        matches = get_interpro_annotations(
+    matches = (
+        get_interpro_annotations(
             uniprot_accession
         )
+    )
 
-        if not matches:
+    annotations = []
 
-            return []
 
-        extracted_matches = []
+    for match in matches:
 
-        for match in matches:
-
-            extracted = (
-                extract_interpro_match(
-                    match
-                )
+        annotation = (
+            extract_interpro_match(
+                match
             )
+        )
 
-            extracted_matches.append(
-                extracted
-            )
-
-        return extracted_matches
-
-    except Exception:
-
-        return []
+        annotations.append(
+            annotation
+        )
 
 
-# =========================================================
-# INTERPRO ANNOTATION
-# =========================================================
-
-st.header("10. InterPro Protein Domain Annotation")
+    return annotations
 
 
-if significant_genes.empty:
+# ============================================================
+# INTERPRO BUTTON
+# ============================================================
+
+if "uniprot_annotation" not in st.session_state:
 
     st.info(
-        "InterPro annotation will appear when "
-        "significant genes are available."
+        "Run UniProt annotation first before using InterPro."
     )
 
 else:
-
-    st.write(
-        "InterPro is queried using the UniProt accession "
-        "identified in the previous stage."
-    )
 
     if st.button(
         "🔬 Annotate Proteins with InterPro"
     ):
 
-        # -------------------------------------------------
-        # Check whether UniProt results exist
-        # -------------------------------------------------
-
-        if (
-            "uniprot_annotation"
-            not in st.session_state
-        ):
-
-            st.warning(
-                "Please run the UniProt annotation step "
-                "first."
-            )
-
-            st.stop()
-
-        uniprot_data = st.session_state[
+        uniprot_df = st.session_state[
             "uniprot_annotation"
         ].copy()
 
-        interpro_rows = []
+
+        interpro_results = []
 
         progress_bar = st.progress(0)
 
-        status_text = st.empty()
-
-        total_genes = len(
-            uniprot_data
+        total = len(
+            uniprot_df
         )
 
-        for index, row in uniprot_data.iterrows():
 
-            gene_id = row[
-                "Gene_ID"
-            ]
+        for index, row in enumerate(
+            uniprot_df.itertuples(
+                index=False
+            )
+        ):
 
-            accession = row[
-                "UniProt_Accession"
-            ]
+            row_dict = row._asdict()
 
-            status_text.write(
-                f"Searching InterPro for "
-                f"{gene_id} ({accession})..."
+
+            # ------------------------------------------------
+            # Gene ID
+            # ------------------------------------------------
+
+            gene_id = row_dict.get(
+                "Gene_ID",
+                "Unknown"
             )
 
-            matches = (
-                annotate_uniprot_with_interpro(
-                    accession
-                )
+
+            # ------------------------------------------------
+            # UniProt accession
+            # ------------------------------------------------
+
+            accession = row_dict.get(
+                "UniProt_Accession",
+                None
             )
 
-            # -------------------------------------------------
-            # No matches
-            # -------------------------------------------------
 
-            if not matches:
+            # ------------------------------------------------
+            # Missing accession
+            # ------------------------------------------------
 
-                interpro_rows.append({
+            if (
+                pd.isna(accession)
+                or str(accession).strip() == ""
+                or str(accession).strip()
+                in [
+                    "Not found",
+                    "Not available",
+                    "N/A",
+                    "API error"
+                ]
+            ):
 
-                    "Gene_ID": gene_id,
+                interpro_results.append({
 
-                    "UniProt_Accession": accession,
+                    "Gene_ID":
+                        gene_id,
+
+                    "UniProt_Accession":
+                        accession,
 
                     "InterPro_Accession":
-                        "No InterPro match",
+                        "Not available",
 
                     "InterPro_Name":
-                        "No InterPro match",
+                        "Not available",
 
                     "InterPro_Type":
                         "Not available",
@@ -1350,58 +1387,258 @@ else:
 
             else:
 
-                for match in matches:
+                accession = str(
+                    accession
+                ).strip()
 
-                    interpro_rows.append({
 
-                        "Gene_ID": gene_id,
+                try:
+
+                    annotations = (
+                        annotate_uniprot_with_interpro(
+                            accession
+                        )
+                    )
+
+
+                    # ----------------------------------------
+                    # No InterPro matches
+                    # ----------------------------------------
+
+                    if not annotations:
+
+                        interpro_results.append({
+
+                            "Gene_ID":
+                                gene_id,
+
+                            "UniProt_Accession":
+                                accession,
+
+                            "InterPro_Accession":
+                                "No InterPro match",
+
+                            "InterPro_Name":
+                                "No InterPro match",
+
+                            "InterPro_Type":
+                                "Not available",
+
+                            "InterPro_Source":
+                                "Not available",
+
+                            "InterPro_Regions":
+                                "Not provided"
+                        })
+
+
+                    # ----------------------------------------
+                    # InterPro matches found
+                    # ----------------------------------------
+
+                    else:
+
+                        for annotation in annotations:
+
+                            interpro_results.append({
+
+                                "Gene_ID":
+                                    gene_id,
+
+                                "UniProt_Accession":
+                                    accession,
+
+                                "InterPro_Accession":
+                                    annotation[
+                                        "InterPro_Accession"
+                                    ],
+
+                                "InterPro_Name":
+                                    annotation[
+                                        "InterPro_Name"
+                                    ],
+
+                                "InterPro_Type":
+                                    annotation[
+                                        "InterPro_Type"
+                                    ],
+
+                                "InterPro_Source":
+                                    annotation[
+                                        "InterPro_Source"
+                                    ],
+
+                                "InterPro_Regions":
+                                    annotation[
+                                        "InterPro_Regions"
+                                    ]
+                            })
+
+
+                except Exception as e:
+
+                    interpro_results.append({
+
+                        "Gene_ID":
+                            gene_id,
 
                         "UniProt_Accession":
                             accession,
 
-                        **match
+                        "InterPro_Accession":
+                            "API error",
+
+                        "InterPro_Name":
+                            str(e),
+
+                        "InterPro_Type":
+                            "Error",
+
+                        "InterPro_Source":
+                            "InterPro API",
+
+                        "InterPro_Regions":
+                            "Not available"
                     })
 
+
+            # ------------------------------------------------
+            # Small delay between requests
+            # ------------------------------------------------
+
+            time.sleep(0.5)
+
+
             progress_bar.progress(
-                (index + 1)
-                / total_genes
+                (index + 1) / total
             )
 
-            time.sleep(0.2)
 
-        status_text.success(
-            "InterPro annotation completed."
+        interpro_df = pd.DataFrame(
+            interpro_results
         )
 
-        interpro_table = pd.DataFrame(
-            interpro_rows
-        )
-
-        # -------------------------------------------------
-        # Display results
-        # -------------------------------------------------
-
-        st.subheader(
-            "InterPro Annotation Results"
-        )
-
-        st.dataframe(
-            interpro_table,
-            use_container_width=True
-        )
-
-        # -------------------------------------------------
-        # Save results
-        # -------------------------------------------------
 
         st.session_state[
             "interpro_annotation"
-        ] = interpro_table
+        ] = interpro_df
 
 
-# =========================================================
-# PIPELINE STATUS
-# =========================================================
+        st.success(
+            "InterPro annotation completed."
+        )
+
+
+# ============================================================
+# DISPLAY INTERPRO RESULTS
+# ============================================================
+
+if "interpro_annotation" in st.session_state:
+
+    st.subheader(
+        "InterPro Annotation Results"
+    )
+
+    st.dataframe(
+        st.session_state[
+            "interpro_annotation"
+        ],
+        use_container_width=True
+    )
+
+
+    # --------------------------------------------------------
+    # InterPro summary
+    # --------------------------------------------------------
+
+    st.subheader(
+        "InterPro Summary"
+    )
+
+    interpro_df = st.session_state[
+        "interpro_annotation"
+    ]
+
+
+    total_proteins = (
+        interpro_df[
+            "UniProt_Accession"
+        ]
+        .nunique()
+    )
+
+
+    matched_rows = interpro_df[
+        interpro_df[
+            "InterPro_Accession"
+        ]
+        .notna()
+        &
+        (
+            interpro_df[
+                "InterPro_Accession"
+            ]
+            != "No InterPro match"
+        )
+        &
+        (
+            interpro_df[
+                "InterPro_Accession"
+            ]
+            != "API error"
+        )
+    ]
+
+
+    matched_entries = (
+        matched_rows[
+            "InterPro_Accession"
+        ]
+        .nunique()
+    )
+
+
+    col1, col2 = st.columns(2)
+
+
+    with col1:
+
+        st.metric(
+            "Proteins processed",
+            int(total_proteins)
+        )
+
+
+    with col2:
+
+        st.metric(
+            "InterPro entries found",
+            int(matched_entries)
+        )
+
+
+    # --------------------------------------------------------
+    # Download InterPro results
+    # --------------------------------------------------------
+
+    interpro_csv = (
+        interpro_df
+        .to_csv(index=False)
+        .encode("utf-8")
+    )
+
+
+    st.download_button(
+        label="⬇️ Download InterPro Results",
+        data=interpro_csv,
+        file_name="interpro_annotation_results.csv",
+        mime="text/csv"
+    )
+
+
+# ============================================================
+# CURRENT PIPELINE STATUS
+# ============================================================
 
 st.header("11. Current Pipeline Status")
 
@@ -1410,80 +1647,25 @@ st.markdown(
     """
 ### Current workflow
 
-**Expression Data**
-
-↓
-
-**Differential Expression**
-
-- Control mean
-- Treatment mean
-- Fold change
-- log₂ fold change
-- p-value
-- FDR-adjusted p-value
-
-↓
-
-**Significant Genes**
-
-- Upregulated
-- Downregulated
-- Not significant
-
-↓
-
-**NCBI**
-
-- Gene ID
-- Gene name
-- Description
-- Organism
-
-↓
-
-**UniProt**
-
-- Protein accession
-- Protein name
-- Protein length
-- Reviewed/unreviewed status
-- Function
-
-↓
-
-**InterPro**
-
-- Protein family
-- Protein domain
-- InterPro accession
-- Source/signature information
-- Matching region
-
-↓
-
-### Next major stage
-
-**KEGG pathway mapping**
+**Transcriptomics data**
+↓  
+**Differential expression analysis**
+↓  
+**Significant genes**
+↓  
+**NCBI gene annotation**
+↓  
+**UniProt protein annotation**
+↓  
+**InterPro protein/domain annotation**
+↓  
+**KEGG pathway mapping — next stage**
 """
 )
 
 
-# =========================================================
-# DOWNLOAD DIFFERENTIAL EXPRESSION RESULTS
-# =========================================================
-
-st.header("12. Download Results")
-
-
-csv_data = results.to_csv(
-    index=False
-)
-
-
-st.download_button(
-    label="⬇️ Download Differential Expression Results",
-    data=csv_data,
-    file_name="differential_expression_results.csv",
-    mime="text/csv"
+st.info(
+    "The next major stage is KEGG pathway mapping. "
+    "InterPro results should be validated before moving "
+    "to pathway-level interpretation."
 )

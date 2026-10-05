@@ -349,7 +349,7 @@ else:
 
 
 # ============================================================
-# NCBI ANNOTATION
+# NCBI CONFIGURATION
 # ============================================================
 
 st.header(
@@ -362,55 +362,365 @@ NCBI_BASE_URL = (
     "entrez/eutils/"
 )
 
+NCBI_TOOL_NAME = (
+    "TranscriptomicsKEGGPipeline"
+)
 
-def get_ncbi_annotation(
+
+# ------------------------------------------------------------
+# Optional NCBI API key
+#
+# If you later add these to Streamlit secrets:
+#
+# NCBI_API_KEY = "your_api_key"
+# NCBI_EMAIL = "your_email@example.com"
+#
+# the application will automatically use them.
+# ------------------------------------------------------------
+
+try:
+
+    NCBI_API_KEY = st.secrets.get(
+        "NCBI_API_KEY",
+        ""
+    )
+
+    NCBI_EMAIL = st.secrets.get(
+        "NCBI_EMAIL",
+        ""
+    )
+
+except Exception:
+
+    NCBI_API_KEY = ""
+
+    NCBI_EMAIL = ""
+
+
+# ============================================================
+# NCBI REQUEST HELPER
+# ============================================================
+
+def ncbi_request(
+    endpoint,
+    params,
+    max_retries=5
+):
+
+    """
+    Send an NCBI E-utilities request.
+
+    Features:
+    - automatic retry for HTTP 429
+    - exponential backoff
+    - NCBI tool identifier
+    - optional email
+    - optional API key
+    """
+
+
+    request_params = params.copy()
+
+
+    # NCBI recommends including tool.
+
+    request_params[
+        "tool"
+    ] = NCBI_TOOL_NAME
+
+
+    # Include email if configured.
+
+    if NCBI_EMAIL:
+
+        request_params[
+            "email"
+        ] = NCBI_EMAIL
+
+
+    # Include API key if configured.
+
+    if NCBI_API_KEY:
+
+        request_params[
+            "api_key"
+        ] = NCBI_API_KEY
+
+
+    for attempt in range(
+        max_retries
+    ):
+
+        try:
+
+            response = requests.get(
+
+                NCBI_BASE_URL + endpoint,
+
+                params=request_params,
+
+                timeout=60
+            )
+
+
+            # ------------------------------------------------
+            # SUCCESS
+            # ------------------------------------------------
+
+            if response.status_code == 200:
+
+                return response
+
+
+            # ------------------------------------------------
+            # RATE LIMIT
+            # ------------------------------------------------
+
+            if response.status_code == 429:
+
+                wait_time = (
+                    2 ** attempt
+                )
+
+                time.sleep(
+                    wait_time
+                )
+
+                continue
+
+
+            # ------------------------------------------------
+            # OTHER HTTP ERROR
+            # ------------------------------------------------
+
+            response.raise_for_status()
+
+
+        except requests.exceptions.RequestException:
+
+            if attempt == (
+                max_retries - 1
+            ):
+
+                raise
+
+
+            wait_time = (
+                2 ** attempt
+            )
+
+            time.sleep(
+                wait_time
+            )
+
+
+    raise RuntimeError(
+        "NCBI request failed after "
+        f"{max_retries} attempts."
+    )
+
+
+# ============================================================
+# NCBI SEARCH FOR ONE GENE
+# ============================================================
+
+def search_ncbi_gene(
     gene_id
 ):
 
-    search_url = (
-        NCBI_BASE_URL +
-        "esearch.fcgi"
-    )
+    """
+    Search NCBI Gene for one gene identifier.
+
+    We keep one search per gene because this allows us
+    to preserve the mapping:
+
+        input Gene_ID → NCBI Gene UID
+
+    The requests are deliberately spaced to stay below
+    the unauthenticated NCBI request rate.
+    """
+
 
     search_params = {
 
-        "db": "gene",
+        "db":
+            "gene",
 
-        "term": (
-            f'"{gene_id}"[Gene Name] '
-            f'OR "{gene_id}"[All Fields]'
-        ),
+        "term":
+            (
+                f'"{gene_id}"[All Fields]'
+            ),
 
-        "retmode": "json",
+        "retmode":
+            "json",
 
-        "retmax": 5
+        "retmax":
+            5
     }
 
-    response = requests.get(
-        search_url,
-        params=search_params,
-        timeout=30
+
+    response = ncbi_request(
+
+        "esearch.fcgi",
+
+        search_params
     )
 
-    response.raise_for_status()
 
-    search_data = response.json()
+    search_data = (
+        response.json()
+    )
+
 
     ids = (
+
         search_data
+
         .get(
             "esearchresult",
             {}
         )
+
         .get(
             "idlist",
             []
         )
     )
 
-    if not ids:
+
+    return ids
+
+
+# ============================================================
+# BATCH NCBI SUMMARY
+# ============================================================
+
+def get_ncbi_summaries(
+    ncbi_gene_ids
+):
+
+    """
+    Retrieve NCBI Gene summaries in ONE request.
+
+    ESummary accepts a comma-separated list of UIDs,
+    which dramatically reduces the number of requests.
+    """
+
+
+    if not ncbi_gene_ids:
+
+        return {}
+
+
+    # Remove duplicate IDs while preserving order.
+
+    unique_ids = list(
+        dict.fromkeys(
+            ncbi_gene_ids
+        )
+    )
+
+
+    summaries = {}
+
+
+    # ESummary supports a list of IDs.
+    #
+    # We use batches of 100 to remain comfortably
+    # within practical request sizes.
+
+    batch_size = 100
+
+
+    for start in range(
+        0,
+        len(unique_ids),
+        batch_size
+    ):
+
+        batch = unique_ids[
+            start:
+            start + batch_size
+        ]
+
+
+        summary_params = {
+
+            "db":
+                "gene",
+
+            "id":
+                ",".join(batch),
+
+            "retmode":
+                "json"
+        }
+
+
+        response = ncbi_request(
+
+            "esummary.fcgi",
+
+            summary_params
+        )
+
+
+        summary_data = (
+            response.json()
+        )
+
+
+        result = summary_data.get(
+            "result",
+            {}
+        )
+
+
+        for ncbi_id in batch:
+
+            if ncbi_id in result:
+
+                summaries[
+                    ncbi_id
+                ] = result[
+                    ncbi_id
+                ]
+
+
+        # Small pause between batches.
+
+        time.sleep(
+            0.5
+        )
+
+
+    return summaries
+
+
+# ============================================================
+# EXTRACT NCBI ANNOTATION
+# ============================================================
+
+def extract_ncbi_annotation(
+    gene_id,
+    ncbi_ids,
+    summaries
+):
+
+    """
+    Convert NCBI Gene data into one annotation row.
+
+    If multiple NCBI matches exist, we do not silently
+    pretend that there is only one match.
+    """
+
+
+    if not ncbi_ids:
 
         return {
+
+            "Gene_ID":
+                gene_id,
 
             "NCBI_Gene_ID":
                 "Not found",
@@ -432,49 +742,83 @@ def get_ncbi_annotation(
         }
 
 
-    ncbi_gene_id = ids[0]
+    # --------------------------------------------------------
+    # If multiple matches occur, use the first matching
+    # record but explicitly record that multiple matches
+    # were returned.
+    # --------------------------------------------------------
+
+    ncbi_gene_id = ncbi_ids[0]
 
 
-    summary_url = (
-        NCBI_BASE_URL +
-        "esummary.fcgi"
+    if ncbi_gene_id not in summaries:
+
+        return {
+
+            "Gene_ID":
+                gene_id,
+
+            "NCBI_Gene_ID":
+                ncbi_gene_id,
+
+            "Gene_Name":
+                "Not available",
+
+            "Gene_Description":
+                "Not available",
+
+            "Organism":
+                "Not available",
+
+            "Chromosome":
+                "Not available",
+
+            "NCBI_Status":
+                "Summary unavailable"
+        }
+
+
+    result = summaries[
+        ncbi_gene_id
+    ]
+
+
+    organism = result.get(
+        "organism",
+        {}
     )
 
-    summary_params = {
 
-        "db": "gene",
+    if not isinstance(
+        organism,
+        dict
+    ):
 
-        "id": ncbi_gene_id,
+        organism = {}
 
-        "retmode": "json"
-    }
 
-    summary_response = requests.get(
-        summary_url,
-        params=summary_params,
-        timeout=30
+    organism_name = organism.get(
+        "scientificname",
+        "Not available"
     )
 
-    summary_response.raise_for_status()
 
-    summary_data = (
-        summary_response.json()
-    )
+    if len(ncbi_ids) > 1:
 
-    result = (
-        summary_data
-        .get(
-            "result",
-            {}
+        status = (
+            f"Matched; "
+            f"{len(ncbi_ids)} NCBI matches returned"
         )
-        .get(
-            ncbi_gene_id,
-            {}
-        )
-    )
+
+    else:
+
+        status = "Matched"
 
 
     return {
+
+        "Gene_ID":
+            gene_id,
 
         "NCBI_Gene_ID":
             ncbi_gene_id,
@@ -492,13 +836,7 @@ def get_ncbi_annotation(
             ),
 
         "Organism":
-            result.get(
-                "organism",
-                {}
-            ).get(
-                "scientificname",
-                "Not available"
-            ),
+            organism_name,
 
         "Chromosome":
             result.get(
@@ -507,9 +845,13 @@ def get_ncbi_annotation(
             ),
 
         "NCBI_Status":
-            "Matched"
+            status
     }
 
+
+# ============================================================
+# RUN NCBI ANNOTATION
+# ============================================================
 
 if st.button(
     "🔎 Annotate Significant Genes with NCBI"
@@ -523,55 +865,175 @@ if st.button(
 
     else:
 
-        ncbi_results = []
-
-        progress = st.progress(0)
-
-        total = len(
-            significant_genes
-        )
-
-        for i, gene_id in enumerate(
+        gene_ids = (
             significant_genes[
                 "Gene_ID"
             ]
+            .astype(str)
+            .drop_duplicates()
+            .tolist()
+        )
+
+
+        st.info(
+            f"Searching NCBI for {len(gene_ids)} "
+            "significant gene(s). "
+            "Requests are deliberately spaced to "
+            "avoid NCBI rate limiting."
+        )
+
+
+        # ----------------------------------------------------
+        # STEP 1
+        # Search each gene
+        # ----------------------------------------------------
+
+        gene_to_ncbi_ids = {}
+
+
+        progress = st.progress(0)
+
+        status_text = st.empty()
+
+
+        total_genes = len(
+            gene_ids
+        )
+
+
+        for i, gene_id in enumerate(
+            gene_ids
         ):
+
+            status_text.write(
+                f"🔎 Searching NCBI: "
+                f"{gene_id}"
+            )
+
 
             try:
 
-                annotation = (
-                    get_ncbi_annotation(
+                ncbi_ids = (
+                    search_ncbi_gene(
                         gene_id
                     )
                 )
 
+
+                gene_to_ncbi_ids[
+                    gene_id
+                ] = ncbi_ids
+
+
             except Exception as e:
 
-                annotation = {
-
-                    "NCBI_Gene_ID":
-                        "Error",
-
-                    "Gene_Name":
-                        "Error",
-
-                    "Gene_Description":
-                        str(e),
-
-                    "Organism":
-                        "Error",
-
-                    "Chromosome":
-                        "Error",
-
-                    "NCBI_Status":
-                        "Request failed"
-                }
+                gene_to_ncbi_ids[
+                    gene_id
+                ] = []
 
 
-            annotation[
-                "Gene_ID"
-            ] = gene_id
+                st.warning(
+                    f"NCBI search failed for "
+                    f"{gene_id}: {e}"
+                )
+
+
+            progress.progress(
+                (i + 1)
+                /
+                total_genes
+            )
+
+
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # This pause applies BETWEEN NCBI requests.
+            #
+            # 0.5 sec = approximately 2 requests/sec.
+            # ------------------------------------------------
+
+            time.sleep(
+                0.5
+            )
+
+
+        # ----------------------------------------------------
+        # STEP 2
+        # Collect all NCBI Gene UIDs
+        # ----------------------------------------------------
+
+        all_ncbi_ids = []
+
+
+        for ids in (
+            gene_to_ncbi_ids.values()
+        ):
+
+            all_ncbi_ids.extend(
+                ids
+            )
+
+
+        all_ncbi_ids = list(
+            dict.fromkeys(
+                all_ncbi_ids
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # STEP 3
+        # ONE batched ESummary request
+        # ----------------------------------------------------
+
+        st.write(
+            f"📦 Retrieving summaries for "
+            f"{len(all_ncbi_ids)} NCBI Gene record(s)..."
+        )
+
+
+        try:
+
+            ncbi_summaries = (
+                get_ncbi_summaries(
+                    all_ncbi_ids
+                )
+            )
+
+        except Exception as e:
+
+            ncbi_summaries = {}
+
+            st.error(
+                "NCBI summary retrieval failed: "
+                f"{e}"
+            )
+
+
+        # ----------------------------------------------------
+        # STEP 4
+        # Build final annotation table
+        # ----------------------------------------------------
+
+        ncbi_results = []
+
+
+        for gene_id in gene_ids:
+
+            annotation = (
+                extract_ncbi_annotation(
+
+                    gene_id,
+
+                    gene_to_ncbi_ids.get(
+                        gene_id,
+                        []
+                    ),
+
+                    ncbi_summaries
+                )
+            )
 
 
             ncbi_results.append(
@@ -579,22 +1041,28 @@ if st.button(
             )
 
 
-            progress.progress(
-                (i + 1) / total
-            )
-
-            time.sleep(0.4)
-
-
         ncbi_df = pd.DataFrame(
             ncbi_results
         )
 
 
+        # ----------------------------------------------------
+        # Save in Streamlit session
+        # ----------------------------------------------------
+
         st.session_state[
             "ncbi_annotation"
         ] = ncbi_df
 
+
+        status_text.success(
+            "✅ NCBI annotation completed."
+        )
+
+
+# ============================================================
+# DISPLAY NCBI RESULTS
+# ============================================================
 
 if "ncbi_annotation" in st.session_state:
 
@@ -602,11 +1070,47 @@ if "ncbi_annotation" in st.session_state:
         "NCBI Annotation Results"
     )
 
+
+    ncbi_display = st.session_state[
+        "ncbi_annotation"
+    ]
+
+
     st.dataframe(
-        st.session_state[
-            "ncbi_annotation"
-        ],
+        ncbi_display,
         use_container_width=True
+    )
+
+
+    # --------------------------------------------------------
+    # NCBI status summary
+    # --------------------------------------------------------
+
+    matched_count = (
+        ncbi_display[
+            "NCBI_Status"
+        ]
+        .astype(str)
+        .str.startswith(
+            "Matched"
+        )
+        .sum()
+    )
+
+
+    no_match_count = (
+        ncbi_display[
+            "NCBI_Status"
+        ]
+        ==
+        "No NCBI match"
+    ).sum()
+
+
+    st.write(
+        f"**NCBI summary:** "
+        f"{matched_count} matched, "
+        f"{no_match_count} not found."
     )
 
 
@@ -867,6 +1371,10 @@ def get_uniprot_annotation(
     }
 
 
+# ============================================================
+# RUN UNIPROT
+# ============================================================
+
 if st.button(
     "🧬 Annotate Significant Genes with UniProt"
 ):
@@ -943,10 +1451,15 @@ if st.button(
 
 
             progress.progress(
-                (i + 1) / total
+                (i + 1)
+                /
+                total
             )
 
-            time.sleep(0.4)
+
+            time.sleep(
+                0.4
+            )
 
 
         uniprot_df = pd.DataFrame(
@@ -958,6 +1471,10 @@ if st.button(
             "uniprot_annotation"
         ] = uniprot_df
 
+
+# ============================================================
+# DISPLAY UNIPROT
+# ============================================================
 
 if "uniprot_annotation" in st.session_state:
 
@@ -1076,7 +1593,9 @@ def get_interpro_annotations(
         )
 
 
-        time.sleep(0.4)
+        time.sleep(
+            0.4
+        )
 
 
     return all_results
@@ -1245,6 +1764,10 @@ def extract_interpro_match(
     }
 
 
+# ============================================================
+# RUN INTERPRO
+# ============================================================
+
 if st.button(
     "🔬 Annotate Significant Proteins with InterPro"
 ):
@@ -1268,6 +1791,7 @@ if st.button(
 
 
         interpro_results = []
+
 
         valid_rows = uniprot_df[
             ~uniprot_df[
@@ -1396,11 +1920,15 @@ if st.button(
             if total > 0:
 
                 progress.progress(
-                    (i + 1) / total
+                    (i + 1)
+                    /
+                    total
                 )
 
 
-            time.sleep(0.4)
+            time.sleep(
+                0.4
+            )
 
 
         interpro_df = pd.DataFrame(
@@ -1412,6 +1940,10 @@ if st.button(
             "interpro_annotation"
         ] = interpro_df
 
+
+# ============================================================
+# DISPLAY INTERPRO
+# ============================================================
 
 if "interpro_annotation" in st.session_state:
 
@@ -1428,7 +1960,7 @@ if "interpro_annotation" in st.session_state:
 
 
 # ============================================================
-# KEGG SETTINGS
+# KEGG
 # ============================================================
 
 st.header(
@@ -1574,8 +2106,7 @@ def get_kegg_pathways(
 
 
 # ============================================================
-# IMPORTANT FIX
-# GET ALL ARABIDOPSIS PATHWAY NAMES
+# KEGG PATHWAY NAMES
 # ============================================================
 
 @st.cache_data
@@ -1624,16 +2155,6 @@ def get_kegg_pathway_names():
         pathway_name = parts[1]
 
 
-        # KEGG may return:
-        #
-        # ath00010
-        #
-        # or
-        #
-        # path:ath00010
-        #
-        # We normalize both.
-
         pathway_id = (
             pathway_id
             .replace(
@@ -1652,7 +2173,7 @@ def get_kegg_pathway_names():
 
 
 # ============================================================
-# COMPLETE KEGG ANNOTATION
+# KEGG ANNOTATION
 # ============================================================
 
 def annotate_uniprot_with_kegg(
@@ -1674,8 +2195,6 @@ def annotate_uniprot_with_kegg(
     ]
 
 
-    # Get pathway names only once.
-
     pathway_names = (
         get_kegg_pathway_names()
     )
@@ -1695,11 +2214,6 @@ def annotate_uniprot_with_kegg(
 
 
         try:
-
-            # ------------------------------------------------
-            # STEP 1
-            # UniProt → KEGG gene
-            # ------------------------------------------------
 
             mappings = (
                 kegg_uniprot_to_gene(
@@ -1731,13 +2245,12 @@ def annotate_uniprot_with_kegg(
                         "No KEGG mapping"
                 })
 
+                time.sleep(
+                    0.5
+                )
+
                 continue
 
-
-            # ------------------------------------------------
-            # STEP 2
-            # KEGG gene → pathways
-            # ------------------------------------------------
 
             all_pathways = []
 
@@ -1774,10 +2287,9 @@ def annotate_uniprot_with_kegg(
                     })
 
 
-                # KEGG requests should be kept
-                # below the documented API rate.
-
-                time.sleep(0.4)
+                time.sleep(
+                    0.5
+                )
 
 
             if not all_pathways:
@@ -1810,11 +2322,6 @@ def annotate_uniprot_with_kegg(
 
                 continue
 
-
-            # ------------------------------------------------
-            # STEP 3
-            # Remove duplicate pathways
-            # ------------------------------------------------
 
             unique_pathways = []
 
@@ -1864,11 +2371,6 @@ def annotate_uniprot_with_kegg(
                             clean_pathway_id
                     })
 
-
-            # ------------------------------------------------
-            # STEP 4
-            # Create final KEGG rows
-            # ------------------------------------------------
 
             for item in unique_pathways:
 
@@ -1933,13 +2435,18 @@ def annotate_uniprot_with_kegg(
             })
 
 
+        time.sleep(
+            0.5
+        )
+
+
     return pd.DataFrame(
         kegg_results
     )
 
 
 # ============================================================
-# KEGG MAPPING BUTTON
+# RUN KEGG
 # ============================================================
 
 if st.button(
@@ -1990,7 +2497,7 @@ if st.button(
 
 
 # ============================================================
-# KEGG TABLE
+# DISPLAY KEGG
 # ============================================================
 
 if "kegg_annotation" in st.session_state:
@@ -2021,7 +2528,7 @@ st.header(
 
 
 st.write(
-    "Select a pathway to visualize the significant "
+    "Select a pathway to visualize significant "
     "transcriptomics genes directly on the KEGG pathway map."
 )
 
@@ -2043,7 +2550,7 @@ else:
 
 
     # --------------------------------------------------------
-    # Merge KEGG results with DE results
+    # Merge with DE results
     # --------------------------------------------------------
 
     pathway_gene_df = kegg_df.merge(
@@ -2062,10 +2569,6 @@ else:
         how="left"
     )
 
-
-    # --------------------------------------------------------
-    # Keep real pathway mappings
-    # --------------------------------------------------------
 
     pathway_gene_df = (
         pathway_gene_df[
@@ -2089,10 +2592,6 @@ else:
 
     else:
 
-        # ----------------------------------------------------
-        # Normalize pathway IDs
-        # ----------------------------------------------------
-
         pathway_gene_df[
             "KEGG_Pathway_ID"
         ] = (
@@ -2107,10 +2606,6 @@ else:
             )
         )
 
-
-        # ----------------------------------------------------
-        # Pathway selector
-        # ----------------------------------------------------
 
         pathway_options = (
             pathway_gene_df[
@@ -2163,10 +2658,6 @@ else:
         )
 
 
-        # ----------------------------------------------------
-        # Selected pathway genes
-        # ----------------------------------------------------
-
         selected_genes = (
             pathway_gene_df[
                 pathway_gene_df[
@@ -2179,21 +2670,10 @@ else:
         )
 
 
-        selected_pathway_name = (
-            pathway_labels[
-                selected_pathway
-            ]
-        )
-
-
         st.subheader(
-            f"🧬 {selected_pathway_name}"
+            f"🧬 {pathway_labels[selected_pathway]}"
         )
 
-
-        # ----------------------------------------------------
-        # UP / DOWN COUNTS
-        # ----------------------------------------------------
 
         selected_up = (
             selected_genes[
@@ -2256,16 +2736,12 @@ else:
             )
 
 
-        # ====================================================
-        # BUILD KEGG COLOR DATASET
-        # ====================================================
+        # ----------------------------------------------------
+        # KEGG COLOR DATASET
+        # ----------------------------------------------------
 
         color_lines = []
 
-
-        # ----------------------------------------------------
-        # UPREGULATED
-        # ----------------------------------------------------
 
         for _, row in (
             selected_up.iterrows()
@@ -2278,26 +2754,16 @@ else:
             )
 
 
-            if kegg_gene in [
+            if kegg_gene not in [
                 "nan",
                 "Not found",
                 "Error"
             ]:
 
-                continue
+                color_lines.append(
+                    f"{kegg_gene} #ffcccc,#cc0000"
+                )
 
-
-            # Background = light red
-            # Foreground = dark red
-
-            color_lines.append(
-                f"{kegg_gene} #ffcccc,#cc0000"
-            )
-
-
-        # ----------------------------------------------------
-        # DOWNREGULATED
-        # ----------------------------------------------------
 
         for _, row in (
             selected_down.iterrows()
@@ -2310,26 +2776,20 @@ else:
             )
 
 
-            if kegg_gene in [
+            if kegg_gene not in [
                 "nan",
                 "Not found",
                 "Error"
             ]:
 
-                continue
+                color_lines.append(
+                    f"{kegg_gene} #cce5ff,#0055aa"
+                )
 
 
-            # Background = light blue
-            # Foreground = dark blue
-
-            color_lines.append(
-                f"{kegg_gene} #cce5ff,#0055aa"
-            )
-
-
-        # ====================================================
-        # BUILD KEGG COLORING URL
-        # ====================================================
+        # ----------------------------------------------------
+        # KEGG URL
+        # ----------------------------------------------------
 
         if color_lines:
 
@@ -2365,27 +2825,27 @@ else:
             )
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # LEGEND
-        # ====================================================
+        # ----------------------------------------------------
 
         st.markdown(
             """
             ### 🎨 Pathway Legend
 
-            🔴 **Red** = Upregulated transcriptomics gene
+            🔴 **Red** = Upregulated gene
 
-            🔵 **Blue** = Downregulated transcriptomics gene
+            🔵 **Blue** = Downregulated gene
 
-            ⚪ Other pathway components = KEGG pathway
-            components not highlighted by this analysis
+            ⚪ Other components = pathway components
+            not highlighted by this analysis
             """
         )
 
 
-        # ====================================================
-        # KEGG PATHWAY VISUALIZATION
-        # ====================================================
+        # ----------------------------------------------------
+        # PATHWAY MAP
+        # ----------------------------------------------------
 
         st.subheader(
             "🗺️ KEGG Pathway Map"
@@ -2451,9 +2911,9 @@ else:
             )
 
 
-        # ====================================================
-        # GENES IN SELECTED PATHWAY
-        # ====================================================
+        # ----------------------------------------------------
+        # PATHWAY GENES
+        # ----------------------------------------------------
 
         st.subheader(
             "🧬 Significant Genes in This Pathway"
@@ -2484,9 +2944,9 @@ else:
         )
 
 
-        # ====================================================
-        # DOWNLOAD PATHWAY DATA
-        # ====================================================
+        # ----------------------------------------------------
+        # DOWNLOAD
+        # ----------------------------------------------------
 
         pathway_csv = (
             selected_genes[
@@ -2549,10 +3009,6 @@ if (
 ):
 
 
-    # --------------------------------------------------------
-    # Start with significant genes
-    # --------------------------------------------------------
-
     final_df = (
         significant_genes.copy()
     )
@@ -2603,7 +3059,7 @@ if (
 
 
     # --------------------------------------------------------
-    # InterPro summary
+    # InterPro
     # --------------------------------------------------------
 
     interpro_df = (
@@ -2675,7 +3131,7 @@ if (
 
 
     # --------------------------------------------------------
-    # KEGG summary
+    # KEGG
     # --------------------------------------------------------
 
     kegg_df = (
@@ -2740,7 +3196,7 @@ if (
 
 
     # --------------------------------------------------------
-    # Display final table
+    # FINAL TABLE
     # --------------------------------------------------------
 
     st.success(
@@ -2755,7 +3211,7 @@ if (
 
 
     # --------------------------------------------------------
-    # Download final table
+    # DOWNLOAD FINAL TABLE
     # --------------------------------------------------------
 
     csv_data = (

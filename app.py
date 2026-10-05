@@ -22,8 +22,8 @@ st.title("🧬 Transcriptomics & KEGG Pathway Analyzer")
 
 st.write(
     "A pipeline for differential expression analysis, "
-    "gene annotation, protein domain annotation, and KEGG "
-    "pathway visualization."
+    "gene annotation, protein domain annotation, and "
+    "KEGG pathway visualization."
 )
 
 
@@ -84,7 +84,8 @@ data["Treatment_Mean"] = data[
 # ------------------------------------------------------------
 
 data["Fold_Change"] = (
-    data["Treatment_Mean"] /
+    data["Treatment_Mean"]
+    /
     data["Control_Mean"]
 )
 
@@ -582,7 +583,7 @@ if st.button(
                 (i + 1) / total
             )
 
-            time.sleep(0.2)
+            time.sleep(0.4)
 
 
         ncbi_df = pd.DataFrame(
@@ -945,7 +946,7 @@ if st.button(
                 (i + 1) / total
             )
 
-            time.sleep(0.2)
+            time.sleep(0.4)
 
 
         uniprot_df = pd.DataFrame(
@@ -973,7 +974,7 @@ if "uniprot_annotation" in st.session_state:
 
 
 # ============================================================
-# INTERPRO
+# INTERPRO ANNOTATION
 # ============================================================
 
 st.header(
@@ -1075,7 +1076,7 @@ def get_interpro_annotations(
         )
 
 
-        time.sleep(0.2)
+        time.sleep(0.4)
 
 
     return all_results
@@ -1399,7 +1400,7 @@ if st.button(
                 )
 
 
-            time.sleep(0.2)
+            time.sleep(0.4)
 
 
         interpro_df = pd.DataFrame(
@@ -1427,7 +1428,7 @@ if "interpro_annotation" in st.session_state:
 
 
 # ============================================================
-# KEGG MAPPING
+# KEGG SETTINGS
 # ============================================================
 
 st.header(
@@ -1442,9 +1443,9 @@ KEGG_BASE_URL = (
 KEGG_ORGANISM = "ath"
 
 
-# ------------------------------------------------------------
-# UniProt → KEGG
-# ------------------------------------------------------------
+# ============================================================
+# UNIPROT → KEGG
+# ============================================================
 
 def kegg_uniprot_to_gene(
     uniprot_accession
@@ -1507,9 +1508,9 @@ def kegg_uniprot_to_gene(
     return mappings
 
 
-# ------------------------------------------------------------
-# KEGG gene → pathway
-# ------------------------------------------------------------
+# ============================================================
+# KEGG GENE → PATHWAYS
+# ============================================================
 
 def get_kegg_pathways(
     kegg_gene_id
@@ -1572,79 +1573,79 @@ def get_kegg_pathways(
     return pathways
 
 
-# ------------------------------------------------------------
-# Pathway names
-# ------------------------------------------------------------
+# ============================================================
+# IMPORTANT FIX
+# GET ALL ARABIDOPSIS PATHWAY NAMES
+# ============================================================
 
-def get_kegg_pathway_names(
-    pathway_ids
-):
+@st.cache_data
+def get_kegg_pathway_names():
 
-    if not pathway_ids:
-
-        return {}
-
-
-    unique_ids = list(
-        dict.fromkeys(
-            pathway_ids
-        )
+    url = (
+        f"{KEGG_BASE_URL}/list/"
+        f"pathway/{KEGG_ORGANISM}"
     )
+
+
+    response = requests.get(
+        url,
+        timeout=30
+    )
+
+
+    response.raise_for_status()
+
+
+    text = response.text.strip()
 
 
     pathway_names = {}
 
 
-    for i in range(
-        0,
-        len(unique_ids),
-        10
-    ):
+    if not text:
 
-        batch = unique_ids[
-            i:i + 10
-        ]
+        return pathway_names
 
 
-        url = (
-            f"{KEGG_BASE_URL}/list/"
-            +
-            "+".join(batch)
+    for line in text.splitlines():
+
+        parts = line.split(
+            "\t"
         )
 
 
-        response = requests.get(
-            url,
-            timeout=30
-        )
-
-
-        if response.status_code == 404:
+        if len(parts) < 2:
 
             continue
 
 
-        response.raise_for_status()
+        pathway_id = parts[0]
+
+        pathway_name = parts[1]
 
 
-        text = response.text.strip()
+        # KEGG may return:
+        #
+        # ath00010
+        #
+        # or
+        #
+        # path:ath00010
+        #
+        # We normalize both.
 
-
-        for line in text.splitlines():
-
-            parts = line.split(
-                "\t"
+        pathway_id = (
+            pathway_id
+            .replace(
+                "path:",
+                ""
             )
+        )
 
 
-            if len(parts) >= 2:
-
-                pathway_names[
-                    parts[0]
-                ] = parts[1]
-
-
-        time.sleep(0.4)
+        pathway_names[
+            pathway_id
+        ] = pathway_name
 
 
     return pathway_names
@@ -1673,6 +1674,13 @@ def annotate_uniprot_with_kegg(
     ]
 
 
+    # Get pathway names only once.
+
+    pathway_names = (
+        get_kegg_pathway_names()
+    )
+
+
     for _, row in (
         valid_rows.iterrows()
     ):
@@ -1687,6 +1695,11 @@ def annotate_uniprot_with_kegg(
 
 
         try:
+
+            # ------------------------------------------------
+            # STEP 1
+            # UniProt → KEGG gene
+            # ------------------------------------------------
 
             mappings = (
                 kegg_uniprot_to_gene(
@@ -1720,6 +1733,11 @@ def annotate_uniprot_with_kegg(
 
                 continue
 
+
+            # ------------------------------------------------
+            # STEP 2
+            # KEGG gene → pathways
+            # ------------------------------------------------
 
             all_pathways = []
 
@@ -1756,7 +1774,10 @@ def annotate_uniprot_with_kegg(
                     })
 
 
-                time.sleep(0.2)
+                # KEGG requests should be kept
+                # below the documented API rate.
+
+                time.sleep(0.4)
 
 
             if not all_pathways:
@@ -1790,7 +1811,10 @@ def annotate_uniprot_with_kegg(
                 continue
 
 
-            # Remove duplicate gene/pathway pairs
+            # ------------------------------------------------
+            # STEP 3
+            # Remove duplicate pathways
+            # ------------------------------------------------
 
             unique_pathways = []
 
@@ -1799,13 +1823,31 @@ def annotate_uniprot_with_kegg(
 
             for item in all_pathways:
 
-                key = (
+                clean_gene_id = (
                     item[
                         "KEGG_Gene_ID"
-                    ],
+                    ]
+                    .replace(
+                        "path:",
+                        ""
+                    )
+                )
+
+
+                clean_pathway_id = (
                     item[
                         "KEGG_Pathway_ID"
                     ]
+                    .replace(
+                        "path:",
+                        ""
+                    )
+                )
+
+
+                key = (
+                    clean_gene_id,
+                    clean_pathway_id
                 )
 
 
@@ -1813,34 +1855,34 @@ def annotate_uniprot_with_kegg(
 
                     seen.add(key)
 
-                    unique_pathways.append(
-                        item
-                    )
+                    unique_pathways.append({
+
+                        "KEGG_Gene_ID":
+                            clean_gene_id,
+
+                        "KEGG_Pathway_ID":
+                            clean_pathway_id
+                    })
 
 
-            pathway_ids = [
-
-                item[
-                    "KEGG_Pathway_ID"
-                ]
-
-                for item
-                in unique_pathways
-            ]
-
-
-            pathway_names = (
-                get_kegg_pathway_names(
-                    pathway_ids
-                )
-            )
-
+            # ------------------------------------------------
+            # STEP 4
+            # Create final KEGG rows
+            # ------------------------------------------------
 
             for item in unique_pathways:
 
                 pathway_id = item[
                     "KEGG_Pathway_ID"
                 ]
+
+
+                pathway_name = (
+                    pathway_names.get(
+                        pathway_id,
+                        "Name not available"
+                    )
+                )
 
 
                 kegg_results.append({
@@ -1860,10 +1902,7 @@ def annotate_uniprot_with_kegg(
                         pathway_id,
 
                     "KEGG_Pathway_Name":
-                        pathway_names.get(
-                            pathway_id,
-                            "Name not available"
-                        ),
+                        pathway_name,
 
                     "KEGG_Status":
                         "Matched"
@@ -1951,7 +1990,7 @@ if st.button(
 
 
 # ============================================================
-# DISPLAY KEGG TABLE
+# KEGG TABLE
 # ============================================================
 
 if "kegg_annotation" in st.session_state:
@@ -1973,7 +2012,7 @@ if "kegg_annotation" in st.session_state:
 
 
 # ============================================================
-# KEGG VISUAL PATHWAY
+# VISUAL KEGG PATHWAY ANALYSIS
 # ============================================================
 
 st.header(
@@ -1987,7 +2026,10 @@ st.write(
 )
 
 
-if "kegg_annotation" not in st.session_state:
+if (
+    "kegg_annotation"
+    not in st.session_state
+):
 
     st.info(
         "Run KEGG mapping above first."
@@ -2001,7 +2043,7 @@ else:
 
 
     # --------------------------------------------------------
-    # Merge KEGG information with DE results
+    # Merge KEGG results with DE results
     # --------------------------------------------------------
 
     pathway_gene_df = kegg_df.merge(
@@ -2021,7 +2063,9 @@ else:
     )
 
 
-    # Keep only actual pathway mappings
+    # --------------------------------------------------------
+    # Keep real pathway mappings
+    # --------------------------------------------------------
 
     pathway_gene_df = (
         pathway_gene_df[
@@ -2046,7 +2090,26 @@ else:
     else:
 
         # ----------------------------------------------------
-        # Pathway selection
+        # Normalize pathway IDs
+        # ----------------------------------------------------
+
+        pathway_gene_df[
+            "KEGG_Pathway_ID"
+        ] = (
+            pathway_gene_df[
+                "KEGG_Pathway_ID"
+            ]
+            .astype(str)
+            .str.replace(
+                "path:",
+                "",
+                regex=False
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # Pathway selector
         # ----------------------------------------------------
 
         pathway_options = (
@@ -2065,6 +2128,7 @@ else:
 
         pathway_labels = {}
 
+
         for _, row in (
             pathway_options.iterrows()
         ):
@@ -2076,6 +2140,7 @@ else:
             pathway_name = row[
                 "KEGG_Pathway_Name"
             ]
+
 
             pathway_labels[
                 pathway_id
@@ -2099,7 +2164,7 @@ else:
 
 
         # ----------------------------------------------------
-        # Genes in selected pathway
+        # Selected pathway genes
         # ----------------------------------------------------
 
         selected_genes = (
@@ -2114,7 +2179,7 @@ else:
         )
 
 
-        pathway_name = (
+        selected_pathway_name = (
             pathway_labels[
                 selected_pathway
             ]
@@ -2122,12 +2187,12 @@ else:
 
 
         st.subheader(
-            f"🧬 {pathway_name}"
+            f"🧬 {selected_pathway_name}"
         )
 
 
         # ----------------------------------------------------
-        # Count up/down
+        # UP / DOWN COUNTS
         # ----------------------------------------------------
 
         selected_up = (
@@ -2158,7 +2223,7 @@ else:
         with col1:
 
             st.metric(
-                "Genes in pathway",
+                "Significant genes",
                 len(
                     selected_genes[
                         "Gene_ID"
@@ -2170,7 +2235,7 @@ else:
         with col2:
 
             st.metric(
-                "Upregulated",
+                "🔴 Upregulated",
                 len(
                     selected_up[
                         "Gene_ID"
@@ -2182,7 +2247,7 @@ else:
         with col3:
 
             st.metric(
-                "Downregulated",
+                "🔵 Downregulated",
                 len(
                     selected_down[
                         "Gene_ID"
@@ -2191,59 +2256,62 @@ else:
             )
 
 
-        # ----------------------------------------------------
-        # KEGG coloring dataset
-        # ----------------------------------------------------
+        # ====================================================
+        # BUILD KEGG COLOR DATASET
+        # ====================================================
 
         color_lines = []
 
 
-        # Upregulated = red
+        # ----------------------------------------------------
+        # UPREGULATED
+        # ----------------------------------------------------
 
         for _, row in (
             selected_up.iterrows()
         ):
 
-            kegg_gene = row[
-                "KEGG_Gene_ID"
-            ]
-
-
-            if pd.isna(kegg_gene):
-
-                continue
+            kegg_gene = str(
+                row[
+                    "KEGG_Gene_ID"
+                ]
+            )
 
 
             if kegg_gene in [
+                "nan",
                 "Not found",
                 "Error"
             ]:
 
                 continue
 
+
+            # Background = light red
+            # Foreground = dark red
 
             color_lines.append(
                 f"{kegg_gene} #ffcccc,#cc0000"
             )
 
 
-        # Downregulated = blue
+        # ----------------------------------------------------
+        # DOWNREGULATED
+        # ----------------------------------------------------
 
         for _, row in (
             selected_down.iterrows()
         ):
 
-            kegg_gene = row[
-                "KEGG_Gene_ID"
-            ]
-
-
-            if pd.isna(kegg_gene):
-
-                continue
+            kegg_gene = str(
+                row[
+                    "KEGG_Gene_ID"
+                ]
+            )
 
 
             if kegg_gene in [
+                "nan",
                 "Not found",
                 "Error"
             ]:
@@ -2251,14 +2319,17 @@ else:
                 continue
 
 
+            # Background = light blue
+            # Foreground = dark blue
+
             color_lines.append(
                 f"{kegg_gene} #cce5ff,#0055aa"
             )
 
 
-        # ----------------------------------------------------
-        # Build KEGG visualization URL
-        # ----------------------------------------------------
+        # ====================================================
+        # BUILD KEGG COLORING URL
+        # ====================================================
 
         if color_lines:
 
@@ -2278,12 +2349,9 @@ else:
 
 
             kegg_visual_url = (
-
                 "https://www.kegg.jp/"
-                "kegg-bin/show_pathway?"
-
-                f"map={selected_pathway}"
-
+                "kegg-bin/show_pathway"
+                f"?map={selected_pathway}"
                 f"&multi_query="
                 f"{encoded_dataset}"
             )
@@ -2292,34 +2360,32 @@ else:
         else:
 
             kegg_visual_url = (
-
-                "https://www.kegg.jp/pathway/"
-                f"{selected_pathway}"
+                "https://www.kegg.jp/"
+                f"pathway/{selected_pathway}"
             )
 
 
-        # ----------------------------------------------------
-        # Legend
-        # ----------------------------------------------------
+        # ====================================================
+        # LEGEND
+        # ====================================================
 
         st.markdown(
             """
-            ### Pathway legend
+            ### 🎨 Pathway Legend
 
-            🔴 **Red** = Upregulated gene
+            🔴 **Red** = Upregulated transcriptomics gene
 
-            🔵 **Blue** = Downregulated gene
+            🔵 **Blue** = Downregulated transcriptomics gene
 
-            The pathway itself is supplied by KEGG; the
-            highlighted objects come from your mapped
-            transcriptomics genes.
+            ⚪ Other pathway components = KEGG pathway
+            components not highlighted by this analysis
             """
         )
 
 
-        # ----------------------------------------------------
-        # Display KEGG pathway
-        # ----------------------------------------------------
+        # ====================================================
+        # KEGG PATHWAY VISUALIZATION
+        # ====================================================
 
         st.subheader(
             "🗺️ KEGG Pathway Map"
@@ -2333,15 +2399,20 @@ else:
                 width: 100%;
                 height: 900px;
                 overflow: auto;
-                border: 1px solid #cccccc;
+                border: 1px solid #444;
                 border-radius: 8px;
+                background-color: white;
             ">
 
                 <iframe
                     src="{kegg_visual_url}"
                     width="100%"
                     height="880"
-                    style="border:none;"
+                    style="
+                        border: none;
+                        background-color: white;
+                    "
+                    title="KEGG Pathway"
                 >
                 </iframe>
 
@@ -2357,7 +2428,7 @@ else:
 
 
             st.markdown(
-                f"**[🔗 Open this colored pathway directly in KEGG]({kegg_visual_url})**"
+                f"### 🔗 [Open this colored pathway directly in KEGG]({kegg_visual_url})"
             )
 
 
@@ -2365,21 +2436,27 @@ else:
 
             st.info(
                 "No upregulated or downregulated KEGG genes "
-                "were available to color on this pathway."
+                "are available to color on this pathway."
+            )
+
+
+            normal_pathway_url = (
+                "https://www.kegg.jp/"
+                f"pathway/{selected_pathway}"
             )
 
 
             st.markdown(
-                f"**[🔗 Open pathway in KEGG](https://www.kegg.jp/pathway/{selected_pathway})**"
+                f"### 🔗 [Open pathway in KEGG]({normal_pathway_url})"
             )
 
 
-        # ----------------------------------------------------
-        # Genes represented on pathway
-        # ----------------------------------------------------
+        # ====================================================
+        # GENES IN SELECTED PATHWAY
+        # ====================================================
 
         st.subheader(
-            "🧬 Genes Represented on This Pathway"
+            "🧬 Significant Genes in This Pathway"
         )
 
 
@@ -2407,9 +2484,9 @@ else:
         )
 
 
-        # ----------------------------------------------------
-        # Download pathway gene table
-        # ----------------------------------------------------
+        # ====================================================
+        # DOWNLOAD PATHWAY DATA
+        # ====================================================
 
         pathway_csv = (
             selected_genes[
@@ -2663,7 +2740,7 @@ if (
 
 
     # --------------------------------------------------------
-    # Display
+    # Display final table
     # --------------------------------------------------------
 
     st.success(
@@ -2678,7 +2755,7 @@ if (
 
 
     # --------------------------------------------------------
-    # Download
+    # Download final table
     # --------------------------------------------------------
 
     csv_data = (

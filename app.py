@@ -103,26 +103,22 @@ if missing_columns:
 st.header("2. Expression Statistics")
 
 
-# Control mean
 data["Control_Mean"] = data[
     control_columns
 ].mean(axis=1)
 
 
-# Treatment mean
 data["Treatment_Mean"] = data[
     treatment_columns
 ].mean(axis=1)
 
 
-# Fold change
 data["Fold_Change"] = (
     data["Treatment_Mean"]
     / data["Control_Mean"]
 )
 
 
-# Prevent infinity
 data["Fold_Change"] = data[
     "Fold_Change"
 ].replace(
@@ -131,7 +127,6 @@ data["Fold_Change"] = data[
 )
 
 
-# Log2 fold change
 data["Log2_Fold_Change"] = np.log2(
     data["Fold_Change"]
 )
@@ -464,7 +459,7 @@ else:
 
 
 # =========================================================
-# NCBI ANNOTATION FUNCTIONS
+# NCBI API
 # =========================================================
 
 NCBI_BASE_URL = (
@@ -474,10 +469,6 @@ NCBI_BASE_URL = (
 
 
 def search_ncbi_gene(gene_id):
-
-    """
-    Search NCBI Gene using the supplied gene identifier.
-    """
 
     params = {
         "db": "gene",
@@ -509,10 +500,6 @@ def search_ncbi_gene(gene_id):
 
 def get_ncbi_gene_summary(gene_uid):
 
-    """
-    Retrieve an NCBI Gene summary.
-    """
-
     params = {
         "db": "gene",
         "id": gene_uid,
@@ -542,10 +529,6 @@ def get_ncbi_gene_summary(gene_uid):
 
 def annotate_gene_ncbi(gene_id):
 
-    """
-    Search and annotate one gene using NCBI.
-    """
-
     try:
 
         ids = search_ncbi_gene(
@@ -563,7 +546,6 @@ def annotate_gene_ncbi(gene_id):
                 "NCBI_Status": "Not found"
             }
 
-        # Use the first NCBI result for this prototype.
         ncbi_uid = ids[0]
 
         summary = get_ncbi_gene_summary(
@@ -632,11 +614,6 @@ if significant_genes.empty:
 
 else:
 
-    st.write(
-        "The significant genes are now sent to NCBI Gene "
-        "for annotation."
-    )
-
     if st.button(
         "🔎 Annotate Significant Genes with NCBI"
     ):
@@ -673,7 +650,6 @@ else:
                 (index + 1) / total_genes
             )
 
-            # Small delay between requests
             time.sleep(0.35)
 
         status_text.success(
@@ -684,7 +660,6 @@ else:
             annotation_results
         )
 
-        # Merge annotation with DE results
         annotation_table = (
             significant_genes[
                 [
@@ -717,54 +692,474 @@ else:
 
 
 # =========================================================
+# UNIPROT API
+# =========================================================
+
+UNIPROT_SEARCH_URL = (
+    "https://rest.uniprot.org/uniprotkb/search"
+)
+
+
+def search_uniprot_gene(
+    gene_id,
+    organism_id="3702"
+):
+
+    """
+    Search UniProtKB using the gene identifier
+    and Arabidopsis thaliana taxonomy.
+
+    Returns matching UniProt protein records.
+    """
+
+    query = (
+        f'gene_exact:{gene_id} '
+        f'AND organism_id:{organism_id}'
+    )
+
+    params = {
+        "query": query,
+        "format": "json",
+        "size": 10,
+        "fields": (
+            "accession,"
+            "id,"
+            "gene_names,"
+            "protein_name,"
+            "organism_name,"
+            "length,"
+            "reviewed,"
+            "cc_function"
+        )
+    }
+
+    response = requests.get(
+        UNIPROT_SEARCH_URL,
+        params=params,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+def extract_protein_name(entry):
+
+    try:
+
+        protein_description = entry.get(
+            "proteinDescription",
+            {}
+        )
+
+        recommended = (
+            protein_description
+            .get(
+                "recommendedName",
+                {}
+            )
+            .get(
+                "fullName",
+                {}
+            )
+            .get(
+                "value"
+            )
+        )
+
+        if recommended:
+            return recommended
+
+        submitted = (
+            protein_description
+            .get(
+                "submittedName",
+                []
+            )
+        )
+
+        if submitted:
+
+            return (
+                submitted[0]
+                .get("fullName", {})
+                .get("value", "Not available")
+            )
+
+    except Exception:
+        pass
+
+    return "Not available"
+
+
+def extract_function(entry):
+
+    try:
+
+        comments = entry.get(
+            "comments",
+            []
+        )
+
+        for comment in comments:
+
+            if comment.get(
+                "commentType"
+            ) == "FUNCTION":
+
+                texts = comment.get(
+                    "texts",
+                    []
+                )
+
+                if texts:
+
+                    return texts[0].get(
+                        "value",
+                        "Not available"
+                    )
+
+    except Exception:
+        pass
+
+    return "Not available"
+
+
+def get_uniprot_annotation(gene_id):
+
+    """
+    Retrieve the best available UniProt result
+    for a gene in Arabidopsis thaliana.
+    """
+
+    try:
+
+        result = search_uniprot_gene(
+            gene_id
+        )
+
+        entries = result.get(
+            "results",
+            []
+        )
+
+        if not entries:
+
+            return {
+                "UniProt_Accession": "Not found",
+                "UniProt_ID": "Not found",
+                "UniProt_Protein": "Not found",
+                "UniProt_Organism": "Not found",
+                "Protein_Length": "Not available",
+                "UniProt_Reviewed": "Not available",
+                "UniProt_Function": "Not available",
+                "UniProt_Status": "Not found"
+            }
+
+        # -------------------------------------------------
+        # Prefer reviewed / Swiss-Prot entries if present
+        # -------------------------------------------------
+
+        reviewed_entries = [
+            entry
+            for entry in entries
+            if entry.get(
+                "entryType"
+            ) == "UniProtKB reviewed (Swiss-Prot)"
+        ]
+
+        if reviewed_entries:
+
+            entry = reviewed_entries[0]
+
+        else:
+
+            entry = entries[0]
+
+        # -------------------------------------------------
+        # Extract accession
+        # -------------------------------------------------
+
+        accession = entry.get(
+            "primaryAccession",
+            "Not available"
+        )
+
+        # -------------------------------------------------
+        # Entry ID
+        # -------------------------------------------------
+
+        entry_id = entry.get(
+            "uniProtkbId",
+            "Not available"
+        )
+
+        # -------------------------------------------------
+        # Organism
+        # -------------------------------------------------
+
+        organism = (
+            entry.get(
+                "organism",
+                {}
+            )
+            .get(
+                "scientificName",
+                "Not available"
+            )
+        )
+
+        # -------------------------------------------------
+        # Protein length
+        # -------------------------------------------------
+
+        protein_length = (
+            entry.get(
+                "sequence",
+                {}
+            )
+            .get(
+                "length",
+                "Not available"
+            )
+        )
+
+        # -------------------------------------------------
+        # Review status
+        # -------------------------------------------------
+
+        entry_type = entry.get(
+            "entryType",
+            "Not available"
+        )
+
+        if (
+            "reviewed"
+            in entry_type.lower()
+        ):
+
+            reviewed_status = "Reviewed"
+
+        else:
+
+            reviewed_status = "Unreviewed"
+
+        # -------------------------------------------------
+        # Protein name
+        # -------------------------------------------------
+
+        protein_name = extract_protein_name(
+            entry
+        )
+
+        # -------------------------------------------------
+        # Function
+        # -------------------------------------------------
+
+        function = extract_function(
+            entry
+        )
+
+        return {
+            "UniProt_Accession": accession,
+            "UniProt_ID": entry_id,
+            "UniProt_Protein": protein_name,
+            "UniProt_Organism": organism,
+            "Protein_Length": protein_length,
+            "UniProt_Reviewed": reviewed_status,
+            "UniProt_Function": function,
+            "UniProt_Status": "Found"
+        }
+
+    except Exception as error:
+
+        return {
+            "UniProt_Accession": "Error",
+            "UniProt_ID": "Error",
+            "UniProt_Protein": "Error",
+            "UniProt_Organism": "Error",
+            "Protein_Length": "Error",
+            "UniProt_Reviewed": "Error",
+            "UniProt_Function": str(error),
+            "UniProt_Status": "Error"
+        }
+
+
+# =========================================================
+# UNIPROT ANNOTATION
+# =========================================================
+
+st.header("9. UniProt Protein Annotation")
+
+
+if significant_genes.empty:
+
+    st.info(
+        "UniProt annotation will appear when significant "
+        "genes are available."
+    )
+
+else:
+
+    st.write(
+        "Searches UniProtKB for protein records corresponding "
+        "to the significant Arabidopsis genes."
+    )
+
+    if st.button(
+        "🧬 Annotate Significant Genes with UniProt"
+    ):
+
+        uniprot_results = []
+
+        progress_bar = st.progress(0)
+
+        status_text = st.empty()
+
+        total_genes = len(
+            significant_genes
+        )
+
+        for index, gene_id in enumerate(
+            significant_genes["Gene_ID"]
+        ):
+
+            status_text.write(
+                f"Searching UniProt for {gene_id}..."
+            )
+
+            annotation = get_uniprot_annotation(
+                str(gene_id)
+            )
+
+            annotation["Gene_ID"] = gene_id
+
+            uniprot_results.append(
+                annotation
+            )
+
+            progress_bar.progress(
+                (index + 1) / total_genes
+            )
+
+            time.sleep(0.2)
+
+        status_text.success(
+            "UniProt annotation completed."
+        )
+
+        uniprot_table = pd.DataFrame(
+            uniprot_results
+        )
+
+        # -------------------------------------------------
+        # Merge with differential-expression results
+        # -------------------------------------------------
+
+        uniprot_display = (
+            significant_genes[
+                [
+                    "Gene_ID",
+                    "Log2_Fold_Change",
+                    "P_Value",
+                    "Adjusted_P_Value",
+                    "Regulation"
+                ]
+            ]
+            .merge(
+                uniprot_table,
+                on="Gene_ID",
+                how="left"
+            )
+        )
+
+        st.subheader(
+            "UniProt Annotation Results"
+        )
+
+        st.dataframe(
+            uniprot_display,
+            use_container_width=True
+        )
+
+        # Save for next stages
+        st.session_state[
+            "uniprot_annotation"
+        ] = uniprot_display
+
+
+# =========================================================
 # INTERPRETATION
 # =========================================================
 
-st.header("9. Interpretation")
+st.header("10. Current Pipeline Status")
 
 
 st.markdown(
     """
-### Current pipeline stage
+### Pipeline completed so far
 
-Your transcriptomics workflow now contains:
-
-**Expression data**
+**1. Expression data**
 
 ↓
 
-**Differential expression**
+**2. Differential expression**
+
+- Control mean
+- Treatment mean
+- Fold change
+- log₂ fold change
+- p-value
+- FDR-adjusted p-value
 
 ↓
 
-**Significant genes**
+**3. Significant gene identification**
+
+- Upregulated
+- Downregulated
+- Not significant
 
 ↓
 
-**NCBI Gene annotation**
-
-The NCBI annotation provides biological information
-associated with the significant genes, such as:
+**4. NCBI annotation**
 
 - NCBI Gene ID
 - Gene name
-- Gene description
+- Description
 - Organism
-- Chromosome
-- NCBI record status
 
-The next stages will add **UniProt protein annotation**,
-then **InterPro protein-domain information**, and finally
-**KEGG pathway mapping**.
+↓
+
+**5. UniProt annotation**
+
+- UniProt accession
+- UniProt entry ID
+- Protein name
+- Organism
+- Protein length
+- Reviewed/unreviewed status
+- Function when available
+
+### Next stage
+
+The next module will use the protein information to retrieve:
+
+**InterPro domains and protein families**
+
+After that, we will connect the annotated genes/proteins to:
+
+**KEGG pathways**
 """
 )
 
 
 # =========================================================
-# DOWNLOAD
+# DOWNLOAD DIFFERENTIAL EXPRESSION RESULTS
 # =========================================================
 
-st.header("10. Download Results")
+st.header("11. Download Results")
 
 
 csv_data = results.to_csv(

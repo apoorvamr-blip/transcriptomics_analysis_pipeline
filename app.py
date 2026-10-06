@@ -5,8 +5,6 @@ import requests
 import time
 import urllib.parse
 import streamlit.components.v1 as components
-from scipy.stats import ttest_ind
-
 
 # ============================================================
 # PAGE CONFIGURATION
@@ -21,166 +19,126 @@ st.set_page_config(
 st.title("🧬 Transcriptomics & KEGG Pathway Analyzer")
 
 st.write(
-    "A pipeline for differential expression analysis, "
+    "A pipeline for transcriptomics time-course analysis, "
     "gene annotation, protein domain annotation, and "
     "KEGG pathway visualization."
 )
 
-
 # ============================================================
-# LOAD DATA
+# LOAD KOMAGATAELLA PHAFFII TPM DATA
 # ============================================================
 
 @st.cache_data
 def load_data():
-    return pd.read_csv("dummy_data.csv")
-
+    return pd.read_csv(
+        "komagataella_dummy_TPM_5timepoints.csv"
+    )
 
 data = load_data()
 
-st.subheader("📊 Input Transcriptomics Data")
+# Check that the expected columns are present.
+required_columns = [
+    "Gene_ID",
+    "TPM_18hr",
+    "TPM_60hr",
+    "TPM_130hr",
+    "TPM_164hr",
+    "TPM_240hr"
+]
+
+missing_columns = [
+    column
+    for column in required_columns
+    if column not in data.columns
+]
+
+if missing_columns:
+    st.error(
+        "The Komagataella TPM file is missing these columns: "
+        + ", ".join(missing_columns)
+    )
+    st.stop()
+
+# ============================================================
+# INPUT DATA
+# ============================================================
+
+st.subheader("📊 Komagataella phaffii Time-Course TPM Data")
+
+st.write(
+    f"Loaded **{len(data)} genes** across "
+    "**5 time points**: 18, 60, 130, 164 and 240 hours."
+)
 
 st.dataframe(
     data,
     use_container_width=True
 )
 
-
 # ============================================================
-# DIFFERENTIAL EXPRESSION ANALYSIS
+# TIME-COURSE ANALYSIS
 # ============================================================
 
-st.header("1️⃣ Differential Expression Analysis")
+st.header("1️⃣ Time-Course Expression Analysis")
 
+timepoint_columns = {
+    "18 hr": "TPM_18hr",
+    "60 hr": "TPM_60hr",
+    "130 hr": "TPM_130hr",
+    "164 hr": "TPM_164hr",
+    "240 hr": "TPM_240hr"
+}
 
-control_columns = [
-    "Control_1",
-    "Control_2",
-    "Control_3"
-]
+selected_baseline = st.selectbox(
+    "Baseline time point",
+    options=list(timepoint_columns.keys()),
+    index=0
+)
 
-treatment_columns = [
-    "Treatment_1",
-    "Treatment_2",
-    "Treatment_3"
-]
+selected_comparison = st.selectbox(
+    "Comparison time point",
+    options=list(timepoint_columns.keys()),
+    index=4
+)
 
+baseline_column = timepoint_columns[selected_baseline]
+comparison_column = timepoint_columns[selected_comparison]
 
-# ------------------------------------------------------------
-# Mean expression
-# ------------------------------------------------------------
-
-data["Control_Mean"] = data[
-    control_columns
-].mean(axis=1)
-
-data["Treatment_Mean"] = data[
-    treatment_columns
-].mean(axis=1)
-
+if baseline_column == comparison_column:
+    st.warning(
+        "Please select two different time points."
+    )
+    st.stop()
 
 # ------------------------------------------------------------
 # Fold change
 # ------------------------------------------------------------
 
+# Small pseudocount prevents division by zero if a future
+# dataset contains a TPM value of exactly zero.
+pseudocount = 0.01
+
 data["Fold_Change"] = (
-    data["Treatment_Mean"]
+    (data[comparison_column] + pseudocount)
     /
-    data["Control_Mean"]
+    (data[baseline_column] + pseudocount)
 )
-
-
-# ------------------------------------------------------------
-# Log2 fold change
-# ------------------------------------------------------------
 
 data["Log2_Fold_Change"] = np.log2(
     data["Fold_Change"]
 )
 
-
 # ------------------------------------------------------------
-# Welch's t-test
+# Exploratory classification
 # ------------------------------------------------------------
 
-p_values = []
-
-for _, row in data.iterrows():
-
-    control_values = row[
-        control_columns
-    ].astype(float)
-
-    treatment_values = row[
-        treatment_columns
-    ].astype(float)
-
-    statistic, p_value = ttest_ind(
-        control_values,
-        treatment_values,
-        equal_var=False
-    )
-
-    p_values.append(p_value)
-
-
-data["P_Value"] = p_values
-
-
-# ============================================================
-# BENJAMINI-HOCHBERG FDR
-# ============================================================
-
-def benjamini_hochberg(pvalues):
-
-    pvalues = np.array(pvalues)
-
-    n = len(pvalues)
-
-    order = np.argsort(pvalues)
-
-    ranked_pvalues = pvalues[order]
-
-    adjusted = np.empty(n)
-
-    previous = 1.0
-
-    for i in range(n - 1, -1, -1):
-
-        rank = i + 1
-
-        value = (
-            ranked_pvalues[i]
-            * n
-            / rank
-        )
-
-        value = min(
-            value,
-            previous
-        )
-
-        adjusted[i] = value
-
-        previous = value
-
-    result = np.empty(n)
-
-    result[order] = adjusted
-
-    return result
-
-
-data["Adjusted_P_Value"] = (
-    benjamini_hochberg(
-        data["P_Value"]
-    )
+st.info(
+    "This TPM file contains one value per gene at each time point, "
+    "not biological replicates. Therefore this Stage 1 prototype "
+    "does **not** calculate a statistical p-value or FDR. "
+    "The regulation labels below are based only on the selected "
+    "log₂ fold-change threshold."
 )
-
-
-# ============================================================
-# SIGNIFICANCE THRESHOLDS
-# ============================================================
 
 log2fc_threshold = st.slider(
     "Absolute log₂ fold-change threshold",
@@ -190,72 +148,40 @@ log2fc_threshold = st.slider(
     step=0.1
 )
 
-adjusted_p_threshold = st.number_input(
-    "Adjusted p-value threshold",
-    min_value=0.001,
-    max_value=0.20,
-    value=0.05,
-    step=0.01
-)
-
-
-# ============================================================
-# CLASSIFY GENES
-# ============================================================
-
 def classify_gene(row):
+    log2fc = row["Log2_Fold_Change"]
 
-    log2fc = row[
-        "Log2_Fold_Change"
-    ]
-
-    adjusted_p = row[
-        "Adjusted_P_Value"
-    ]
-
-    if (
-        adjusted_p <= adjusted_p_threshold
-        and
-        log2fc >= log2fc_threshold
-    ):
-
+    if log2fc >= log2fc_threshold:
         return "Upregulated"
 
-    elif (
-        adjusted_p <= adjusted_p_threshold
-        and
-        log2fc <= -log2fc_threshold
-    ):
-
+    if log2fc <= -log2fc_threshold:
         return "Downregulated"
 
-    else:
-
-        return "Not significant"
-
+    return "Not significant"
 
 data["Regulation"] = data.apply(
     classify_gene,
     axis=1
 )
 
+# Keep these columns so the existing annotation sections below
+# can continue to use the same Gene_ID / Log2_Fold_Change /
+# Regulation structure.
+data["P_Value"] = np.nan
+data["Adjusted_P_Value"] = np.nan
 
 # ============================================================
-# DIFFERENTIAL EXPRESSION RESULTS
+# EXPRESSION RESULTS
 # ============================================================
 
-st.subheader(
-    "Differential Expression Results"
-)
+st.subheader("Expression Comparison Results")
 
 de_columns = [
     "Gene_ID",
-    "Control_Mean",
-    "Treatment_Mean",
+    baseline_column,
+    comparison_column,
     "Fold_Change",
     "Log2_Fold_Change",
-    "P_Value",
-    "Adjusted_P_Value",
     "Regulation"
 ]
 
@@ -264,77 +190,69 @@ st.dataframe(
     use_container_width=True
 )
 
-
 # ============================================================
 # SUMMARY
 # ============================================================
 
-st.subheader(
-    "📈 Differential Expression Summary"
-)
+st.subheader("📈 Time-Course Comparison Summary")
 
 up_count = (
-    data["Regulation"]
-    == "Upregulated"
+    data["Regulation"] == "Upregulated"
 ).sum()
 
 down_count = (
-    data["Regulation"]
-    == "Downregulated"
+    data["Regulation"] == "Downregulated"
 ).sum()
 
 not_sig_count = (
-    data["Regulation"]
-    == "Not significant"
+    data["Regulation"] == "Not significant"
 ).sum()
-
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-
     st.metric(
         "Upregulated",
         up_count
     )
 
 with col2:
-
     st.metric(
         "Downregulated",
         down_count
     )
 
 with col3:
-
     st.metric(
-        "Not Significant",
+        "Below threshold",
         not_sig_count
     )
 
-
 # ============================================================
-# SIGNIFICANT GENES
+# CANDIDATE GENES
 # ============================================================
 
-significant_genes = data[
-    data["Regulation"]
-    != "Not significant"
+candidate_genes = data[
+    data["Regulation"] != "Not significant"
 ].copy()
 
+# Keep the old variable name because the annotation sections
+# below already use significant_genes.
+significant_genes = candidate_genes.copy()
 
 st.subheader(
-    "🎯 Significant Genes"
+    "🎯 Genes Showing Expression Change"
 )
 
-if len(significant_genes) > 0:
+if len(candidate_genes) > 0:
 
     st.dataframe(
-        significant_genes[
+        candidate_genes[
             [
                 "Gene_ID",
+                baseline_column,
+                comparison_column,
                 "Log2_Fold_Change",
-                "Adjusted_P_Value",
                 "Regulation"
             ]
         ],
@@ -344,8 +262,32 @@ if len(significant_genes) > 0:
 else:
 
     st.info(
-        "No genes meet the current significance thresholds."
+        "No genes meet the current log₂ fold-change threshold."
     )
+
+# ============================================================
+# QUICK CHECK
+# ============================================================
+
+st.subheader("🧬 Gene ID Check")
+
+pas_count = (
+    data["Gene_ID"]
+    .astype(str)
+    .str.startswith("PAS_")
+).sum()
+
+st.success(
+    f"Detected **{pas_count} PAS genes** out of "
+    f"**{len(data)} total genes**."
+)
+
+if pas_count != len(data):
+    st.warning(
+        "Some Gene_ID values do not start with PAS_. "
+        "Check the input file before annotation."
+    )
+
 
 
 # ============================================================

@@ -1064,135 +1064,266 @@ st.header(
     "3️⃣ UniProt Protein Annotation"
 )
 
-
 UNIPROT_URL = (
     "https://rest.uniprot.org/"
     "uniprotkb/search"
 )
 
-
-def get_uniprot_annotation(
-    gene_id
-):
-
-    params = {
-
-        "query":
-            f"gene_exact:{gene_id} "
-            f"AND organism_id:3702",
-
-        "format":
-            "json",
-
-        "fields":
-            (
-                "accession,"
-                "id,"
-                "gene_names,"
-                "protein_name,"
-                "organism_name,"
-                "length,"
-                "reviewed,"
-                "cc_function"
-            ),
-
-        "size": 20
-    }
+# Komagataella phaffii GS115 / ATCC 20864
+# UniProt/NCBI taxonomy ID: 644223
+UNIPROT_TAXONOMY_ID = "644223"
 
 
-    response = requests.get(
-        UNIPROT_URL,
-        params=params,
-        timeout=30
-    )
+@st.cache_data(ttl=3600)
+def get_uniprot_annotation(gene_id):
+    """
+    Find a UniProtKB entry for a Komagataella phaffii
+    ordered locus name such as PAS_chr4_0821.
 
-    response.raise_for_status()
+    Matching strategy:
+    1. Search the PAS locus as a gene field within the
+       Komagataella phaffii GS115 taxonomy.
+    2. Search the exact locus text within the same organism.
+    3. Prefer a result whose UniProt gene metadata contains
+       the input PAS locus exactly.
+    4. Prefer reviewed Swiss-Prot if more than one exact
+       result is available.
+    """
 
-    data_json = response.json()
+    gene_id = str(gene_id).strip()
 
-    results = data_json.get(
-        "results",
-        []
-    )
-
-
-    if not results:
-
+    if not gene_id:
         return {
-
-            "UniProt_Accession":
-                "Not found",
-
-            "UniProt_ID":
-                "Not found",
-
-            "UniProt_Protein":
-                "Not found",
-
-            "UniProt_Organism":
-                "Not found",
-
-            "Protein_Length":
-                "Not found",
-
-            "UniProt_Reviewed":
-                "Not found",
-
-            "UniProt_Function":
-                "Not available",
-
-            "UniProt_Status":
-                "No UniProt match"
+            "UniProt_Accession": "Not found",
+            "UniProt_ID": "Not found",
+            "UniProt_Protein": "Not found",
+            "UniProt_Organism": "Not found",
+            "Protein_Length": "Not found",
+            "UniProt_Reviewed": "Not found",
+            "UniProt_Function": "Not available",
+            "UniProt_Annotation_Score": "Not available",
+            "UniProt_Status": "Empty Gene_ID"
         }
 
+    fields = (
+        "accession,"
+        "id,"
+        "gene_names,"
+        "protein_name,"
+        "organism_name,"
+        "length,"
+        "reviewed,"
+        "cc_function,"
+        "annotation_score"
+    )
 
-    reviewed_results = [
+    # --------------------------------------------------------
+    # Try several UniProt search forms.
+    #
+    # The important change is that all searches are restricted
+    # to Komagataella phaffii GS115, not Arabidopsis.
+    # --------------------------------------------------------
 
-        r for r in results
-
-        if r.get("entryType")
-        ==
-        "UniProtKB reviewed (Swiss-Prot)"
+    queries = [
+        (
+            f"gene:{gene_id} "
+            f"AND organism_id:{UNIPROT_TAXONOMY_ID}"
+        ),
+        (
+            f"gene_exact:{gene_id} "
+            f"AND organism_id:{UNIPROT_TAXONOMY_ID}"
+        ),
+        (
+            f'"{gene_id}" '
+            f"AND organism_id:{UNIPROT_TAXONOMY_ID}"
+        )
     ]
 
+    all_results = []
+
+    for query in queries:
+
+        params = {
+            "query": query,
+            "format": "json",
+            "fields": fields,
+            "size": 20
+        }
+
+        response = requests.get(
+            UNIPROT_URL,
+            params=params,
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            continue
+
+        data_json = response.json()
+
+        results = data_json.get(
+            "results",
+            []
+        )
+
+        if results:
+            all_results.extend(results)
+
+    # --------------------------------------------------------
+    # Remove duplicate UniProt accessions.
+    # --------------------------------------------------------
+
+    unique_results = []
+    seen_accessions = set()
+
+    for result in all_results:
+
+        accession = result.get(
+            "primaryAccession"
+        )
+
+        if not accession:
+            continue
+
+        if accession in seen_accessions:
+            continue
+
+        seen_accessions.add(accession)
+        unique_results.append(result)
+
+    if not unique_results:
+
+        return {
+            "UniProt_Accession": "Not found",
+            "UniProt_ID": "Not found",
+            "UniProt_Protein": "Not found",
+            "UniProt_Organism": "Not found",
+            "Protein_Length": "Not found",
+            "UniProt_Reviewed": "Not found",
+            "UniProt_Function": "Not available",
+            "UniProt_Annotation_Score": "Not available",
+            "UniProt_Status": (
+                "No UniProt match for "
+                f"{gene_id} in Komagataella phaffii GS115"
+            )
+        }
+
+    # --------------------------------------------------------
+    # Score each result for an exact PAS locus match.
+    # --------------------------------------------------------
+
+    def result_has_exact_locus(result):
+
+        genes = result.get(
+            "genes",
+            []
+        )
+
+        for gene in genes:
+
+            # Main gene name
+            gene_name = gene.get(
+                "geneName",
+                {}
+            )
+
+            if (
+                isinstance(gene_name, dict)
+                and
+                gene_name.get("value") == gene_id
+            ):
+                return True
+
+            # Ordered locus names
+            ordered_names = gene.get(
+                "orderedLocusNames",
+                []
+            )
+
+            for item in ordered_names:
+
+                if (
+                    isinstance(item, dict)
+                    and
+                    item.get("value") == gene_id
+                ):
+                    return True
+
+            # ORF names
+            orf_names = gene.get(
+                "orfNames",
+                []
+            )
+
+            for item in orf_names:
+
+                if (
+                    isinstance(item, dict)
+                    and
+                    item.get("value") == gene_id
+                ):
+                    return True
+
+            # Synonyms
+            synonyms = gene.get(
+                "synonyms",
+                []
+            )
+
+            for item in synonyms:
+
+                if (
+                    isinstance(item, dict)
+                    and
+                    item.get("value") == gene_id
+                ):
+                    return True
+
+        return False
+
+    exact_results = [
+        result
+        for result in unique_results
+        if result_has_exact_locus(result)
+    ]
+
+    if exact_results:
+        candidate_results = exact_results
+    else:
+        candidate_results = unique_results
+
+    # Prefer reviewed Swiss-Prot when available.
+    reviewed_results = [
+        result
+        for result in candidate_results
+        if result.get("entryType")
+        == "UniProtKB reviewed (Swiss-Prot)"
+    ]
 
     if reviewed_results:
-
         result = reviewed_results[0]
-
     else:
-
-        result = results[0]
-
+        result = candidate_results[0]
 
     accession = result.get(
         "primaryAccession",
         "Not available"
     )
 
-
     uniprot_id = result.get(
         "uniProtkbId",
         "Not available"
     )
 
-
-    protein_description = (
-        result.get(
-            "proteinDescription",
-            {}
-        )
+    protein_description = result.get(
+        "proteinDescription",
+        {}
     )
 
-
-    recommended_name = (
-        protein_description
-        .get(
-            "recommendedName",
-            {}
-        )
+    recommended_name = protein_description.get(
+        "recommendedName",
+        {}
     )
-
 
     protein_name = (
         recommended_name
@@ -1206,6 +1337,30 @@ def get_uniprot_annotation(
         )
     )
 
+    # Some unreviewed records use a submitted name.
+    if protein_name == "Not available":
+
+        submitted_names = (
+            protein_description
+            .get(
+                "submissionNames",
+                []
+            )
+        )
+
+        if submitted_names:
+
+            protein_name = (
+                submitted_names[0]
+                .get(
+                    "fullName",
+                    {}
+                )
+                .get(
+                    "value",
+                    "Not available"
+                )
+            )
 
     organism = (
         result.get(
@@ -1218,7 +1373,6 @@ def get_uniprot_annotation(
         )
     )
 
-
     protein_length = (
         result.get(
             "sequence",
@@ -1230,7 +1384,6 @@ def get_uniprot_annotation(
         )
     )
 
-
     reviewed = (
         result.get(
             "entryType",
@@ -1240,24 +1393,17 @@ def get_uniprot_annotation(
         "UniProtKB reviewed (Swiss-Prot)"
     )
 
-
     comments = result.get(
         "comments",
         []
     )
 
-
-    function_text = (
-        "Not available"
-    )
-
+    function_text = "Not available"
 
     for comment in comments:
 
         if (
-            comment.get(
-                "commentType"
-            )
+            comment.get("commentType")
             ==
             "FUNCTION"
         ):
@@ -1279,37 +1425,47 @@ def get_uniprot_annotation(
 
             break
 
+    annotation_score = result.get(
+        "annotationScore",
+        "Not available"
+    )
+
+    if exact_results:
+
+        if reviewed:
+            status = (
+                "Matched exact PAS locus "
+                "(reviewed Swiss-Prot)"
+            )
+        else:
+            status = (
+                "Matched exact PAS locus "
+                "(UniProtKB)"
+            )
+
+    else:
+
+        status = (
+            "Matched within Komagataella phaffii; "
+            "exact PAS locus not confirmed in returned "
+            "gene metadata"
+        )
 
     return {
-
-        "UniProt_Accession":
-            accession,
-
-        "UniProt_ID":
-            uniprot_id,
-
-        "UniProt_Protein":
-            protein_name,
-
-        "UniProt_Organism":
-            organism,
-
-        "Protein_Length":
-            protein_length,
-
-        "UniProt_Reviewed":
-            (
-                "Yes"
-                if reviewed
-                else
-                "No"
-            ),
-
-        "UniProt_Function":
-            function_text,
-
-        "UniProt_Status":
-            "Matched"
+        "UniProt_Accession": accession,
+        "UniProt_ID": uniprot_id,
+        "UniProt_Protein": protein_name,
+        "UniProt_Organism": organism,
+        "Protein_Length": protein_length,
+        "UniProt_Reviewed": (
+            "Yes"
+            if reviewed
+            else
+            "No"
+        ),
+        "UniProt_Function": function_text,
+        "UniProt_Annotation_Score": annotation_score,
+        "UniProt_Status": status
     }
 
 
@@ -1324,7 +1480,8 @@ if st.button(
     if len(significant_genes) == 0:
 
         st.warning(
-            "There are no significant genes to annotate."
+            "There are no genes above the current "
+            "log₂ fold-change threshold."
         )
 
     else:
@@ -1333,16 +1490,19 @@ if st.button(
 
         progress = st.progress(0)
 
+        status_text = st.empty()
+
         total = len(
             significant_genes
         )
 
-
         for i, gene_id in enumerate(
-            significant_genes[
-                "Gene_ID"
-            ]
+            significant_genes["Gene_ID"]
         ):
+
+            status_text.write(
+                f"🧬 Searching UniProt: {gene_id}"
+            )
 
             try:
 
@@ -1377,37 +1537,35 @@ if st.button(
                     "UniProt_Function":
                         str(e),
 
+                    "UniProt_Annotation_Score":
+                        "Error",
+
                     "UniProt_Status":
                         "Request failed"
                 }
-
 
             annotation[
                 "Gene_ID"
             ] = gene_id
 
-
             uniprot_results.append(
                 annotation
             )
 
-
             progress.progress(
-                (i + 1)
-                /
-                total
+                (i + 1) / total
             )
 
+            # Be polite to the UniProt REST service.
+            time.sleep(0.3)
 
-            time.sleep(
-                0.4
-            )
-
+        status_text.success(
+            f"UniProt search completed for {total} gene(s)."
+        )
 
         uniprot_df = pd.DataFrame(
             uniprot_results
         )
-
 
         st.session_state[
             "uniprot_annotation"
@@ -1430,6 +1588,30 @@ if "uniprot_annotation" in st.session_state:
         ],
         use_container_width=True
     )
+
+    matched_count = (
+        ~st.session_state[
+            "uniprot_annotation"
+        ][
+            "UniProt_Status"
+        ].astype(str).str.contains(
+            "No UniProt match|Request failed",
+            na=False
+        )
+    ).sum()
+
+    total_results = len(
+        st.session_state[
+            "uniprot_annotation"
+        ]
+    )
+
+    st.write(
+        f"**UniProt summary:** "
+        f"{matched_count} matched out of "
+        f"{total_results} queried."
+    )
+
 
 
 # ============================================================
